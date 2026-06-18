@@ -9,7 +9,12 @@ from app.auth import current_user
 from app.config import settings as app_settings
 from app.db import get_session
 from app.models import AnswerBank, AppUser
-from app.schemas import NotificationSettingsOut, NotificationSettingsUpdate
+from app.schemas import (
+    DiscoveryPrefsOut,
+    DiscoveryPrefsUpdate,
+    NotificationSettingsOut,
+    NotificationSettingsUpdate,
+)
 from app.services import notify
 
 router = APIRouter(prefix="/settings", tags=["settings"])
@@ -57,6 +62,41 @@ async def update_settings(
         enabled=prefs["enabled"],
         telegram_configured=bool(app_settings.telegram_bot_token),
     )
+
+
+@router.get("/discovery", response_model=DiscoveryPrefsOut)
+async def get_discovery_prefs(
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DiscoveryPrefsOut:
+    bank = await _bank(session, user.id)
+    prefs = (bank.prefs if bank else {}) or {}
+    return DiscoveryPrefsOut(
+        ksa_only=prefs.get("ksa_only", True),
+        auto_apply_enabled=prefs.get("auto_apply_enabled", False),
+        auto_apply_threshold=prefs.get("auto_apply_threshold", 0.6),
+    )
+
+
+@router.put("/discovery", response_model=DiscoveryPrefsOut)
+async def update_discovery_prefs(
+    body: DiscoveryPrefsUpdate,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> DiscoveryPrefsOut:
+    prefs = {
+        "ksa_only": body.ksa_only,
+        "auto_apply_enabled": body.auto_apply_enabled,
+        "auto_apply_threshold": body.auto_apply_threshold,
+    }
+    bank = await _bank(session, user.id)
+    if bank is None:
+        bank = AnswerBank(user_id=user.id, prefs=prefs)
+        session.add(bank)
+    else:
+        bank.prefs = prefs
+    await session.commit()
+    return DiscoveryPrefsOut(**prefs)
 
 
 @router.post("/test")

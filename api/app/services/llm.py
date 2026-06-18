@@ -169,6 +169,64 @@ async def _anthropic_json(model, system, prompt, schema) -> dict | None:
         await client.close()
 
 
+_RANK_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "scores": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "score": {"type": "number"},
+                },
+                "required": ["id", "score"],
+            },
+        }
+    },
+    "required": ["scores"],
+}
+
+_RANK_SYSTEM = (
+    "You are a strict job-matching expert for the Saudi Arabian market. Given a "
+    "candidate profile and a list of jobs, score each job 0..1 for genuine fit. "
+    "Be discriminating, not generous:\n"
+    "- Same profession/domain as the candidate is required for a high score. A "
+    "different engineering discipline or unrelated field (e.g. a mechanical, "
+    "civil, sales, or fire-safety role for a SOFTWARE engineer) must score LOW "
+    "(<=0.2), even if the word 'engineer' appears.\n"
+    "- Reward matching core skills, technologies, and seniority; penalize "
+    "mismatched seniority or missing core requirements.\n"
+    "- 0.8-1.0 excellent fit; 0.5-0.7 plausible; 0.2-0.4 weak; 0.0-0.1 irrelevant.\n"
+    "Return a score for every job id provided."
+)
+
+
+async def rank_jobs(profile_text: str, jobs: list[dict]) -> dict[str, float] | None:
+    """LLM relevance re-rank. Returns {job_id: score in [0,1]} or None."""
+    if not jobs or not available():
+        return None
+    prompt = (
+        f"CANDIDATE PROFILE:\n{profile_text[:6000]}\n\nJOBS (id, title, company, "
+        f"location):\n{json.dumps(jobs, ensure_ascii=False)[:12000]}\n\n"
+        "Score every job id for fit."
+    )
+    res = await complete_json(
+        system=_RANK_SYSTEM, prompt=prompt, schema=_RANK_SCHEMA, kind="rank"
+    )
+    if not res:
+        return None
+    out: dict[str, float] = {}
+    for s in res.get("scores", []):
+        try:
+            out[str(s["id"])] = max(0.0, min(1.0, float(s["score"])))
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out or None
+
+
 async def tailor_with_llm(applicant: dict, job: dict) -> dict | None:
     """Tailored CV + cover letter, constrained to applicant facts. None if no key."""
     prompt = (

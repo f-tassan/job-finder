@@ -43,8 +43,9 @@ class Settings(BaseSettings):
     max_users: int = 3
 
     # --- Discovery / relevance (Phase 2) ---
-    match_threshold: float = 0.25  # min cosine to record a job_match
+    match_threshold: float = 0.25  # min cosine to be a candidate (recall)
     auto_track_threshold: float = 0.55  # auto-create a `discovered` application
+    rerank_top_k: int = 40  # top cosine candidates to LLM re-rank per user
     discovery_interval_minutes: int = 360  # Celery Beat cadence
 
     # IMAP (email_alerts connector). Connector returns [] unless these are set.

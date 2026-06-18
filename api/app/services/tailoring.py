@@ -42,11 +42,61 @@ def keyword_coverage(job_text: str, cv_text: str) -> float:
     return round(hit / len(kws), 4)
 
 
+def _str_list(v) -> list[str]:
+    """Coerce a value into a list of strings (answer-bank fields are free text)."""
+    if v is None:
+        return []
+    if isinstance(v, list):
+        return [str(x) for x in v if x]
+    if isinstance(v, str):
+        return [p.strip() for p in re.split(r"[,\n;]", v) if p.strip()]
+    return [str(v)]
+
+
+def _edu_list(v) -> list[dict]:
+    if not v:
+        return []
+    items = v if isinstance(v, list) else [v]
+    out: list[dict] = []
+    for it in items:
+        if isinstance(it, dict):
+            out.append(it)
+        elif it:
+            out.append({"degree": str(it), "institution": None, "year": None})
+    return out
+
+
+def _exp_list(v) -> list[dict]:
+    if not v:
+        return []
+    items = v if isinstance(v, list) else [v]
+    out: list[dict] = []
+    for it in items:
+        if isinstance(it, dict):
+            out.append(it)
+        elif it:
+            out.append(
+                {"title": str(it), "company": "", "start": None, "end": None, "bullets": []}
+            )
+    return out
+
+
+def _normalize_cv(cv: dict) -> dict:
+    """Coerce a CV dict into the expected shapes (handles free-text inputs)."""
+    return {
+        "summary": cv.get("summary") or "",
+        "skills": _str_list(cv.get("skills")),
+        "experience": _exp_list(cv.get("experience")),
+        "education": _edu_list(cv.get("education")),
+        "certifications": _str_list(cv.get("certifications")),
+    }
+
+
 def _cv_to_text(cv: dict, cover_letter: str) -> str:
     parts = [cv.get("summary", ""), " ".join(cv.get("skills", []))]
     for e in cv.get("experience", []):
         parts.append(f"{e.get('title','')} {e.get('company','')}")
-        parts.extend(e.get("bullets", []))
+        parts.extend(e.get("bullets", []) or [])
     for ed in cv.get("education", []):
         parts.append(f"{ed.get('degree','')} {ed.get('institution','')}")
     parts.extend(cv.get("certifications", []))
@@ -117,7 +167,7 @@ async def tailor(applicant: dict, job: dict) -> dict:
     if not result:
         result = _deterministic(applicant, job)
     cover_letter = result.pop("cover_letter", "")
-    cv = result
+    cv = _normalize_cv(result)
     job_text = f"{job.get('title','')} {job.get('description','')}"
     coverage = keyword_coverage(job_text, _cv_to_text(cv, cover_letter))
     return {

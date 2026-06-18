@@ -95,6 +95,12 @@ export interface NotificationSettings {
   telegram_configured: boolean;
 }
 
+export interface DiscoveryPrefs {
+  ksa_only: boolean;
+  auto_apply_enabled: boolean;
+  auto_apply_threshold: number;
+}
+
 export interface JobMatch {
   job: Job;
   relevance_score: number;

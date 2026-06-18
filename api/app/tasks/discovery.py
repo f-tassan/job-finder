@@ -15,7 +15,7 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import select
+from sqlalchemy import delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,7 @@ from app.models import (
     JobMatch,
     SavedSearch,
 )
-from app.services import embeddings, relevance
+from app.services import embeddings, llm, relevance
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
@@ -79,6 +79,8 @@ async def _ingest(session: AsyncSession) -> tuple[int, int]:
                         "location": j.get("location"),
                         "url": j["url"],
                         "description": j.get("description"),
+                        # Reset so the (possibly now-richer) text is re-embedded.
+                        "embedding": None,
                     },
                 )
             )
@@ -104,19 +106,27 @@ async def _embed_new_jobs(session: AsyncSession) -> int:
 
 async def _match_user(
     session: AsyncSession, user: AppUser, jobs: list[Job]
-) -> tuple[int, list[str]]:
+) -> tuple[int, list[str], list[str]]:
+    """Returns (matched, auto_tracked_titles, auto_prepare_app_ids)."""
     bank = (
         await session.execute(
             select(AnswerBank).where(AnswerBank.user_id == user.id)
         )
     ).scalar_one_or_none()
     if bank is None:
-        return 0, []
+        return 0, [], []
     ptext = embeddings.profile_text(bank.field, bank.data or {})
     if not ptext.strip():
-        return 0, []
+        return 0, [], []
     pemb = embeddings.embed(ptext)
     bank.embedding = pemb
+
+    prefs = bank.prefs or {}
+    ksa_only = prefs.get("ksa_only", True)
+    auto_enabled = prefs.get("auto_apply_enabled", False)
+    auto_threshold = float(
+        prefs.get("auto_apply_threshold", settings.auto_track_threshold)
+    )
 
     filter_sets = [
         s.filters or {}
@@ -131,9 +141,15 @@ async def _match_user(
         .all()
     ]
 
-    matched = 0
-    auto_tracked: list[str] = []
+    # Rebuild this user's matches from scratch so location/threshold changes (and
+    # newly-filtered-out jobs) are reflected immediately.
+    await session.execute(delete(JobMatch).where(JobMatch.user_id == user.id))
+
+    # 1) Recall: cosine over all jobs passing KSA + saved-search hard filters.
+    candidates: list[tuple[Job, float]] = []
     for job in jobs:
+        if ksa_only and not relevance.is_ksa(job.location, job.description):
+            continue
         if filter_sets and not any(
             relevance.passes_hard_filters(
                 title=job.title,
@@ -144,43 +160,81 @@ async def _match_user(
             for f in filter_sets
         ):
             continue
-        score = relevance.cosine_similarity(pemb, job.embedding)
-        if score < settings.match_threshold:
-            continue
-        await session.execute(
-            pg_insert(JobMatch)
-            .values(user_id=user.id, job_id=job.id, relevance_score=score)
-            .on_conflict_do_update(
-                index_elements=["user_id", "job_id"],
-                set_={"relevance_score": score},
-            )
+        cos = relevance.cosine_similarity(pemb, job.embedding)
+        if cos >= settings.match_threshold:
+            candidates.append((job, cos))
+
+    candidates.sort(key=lambda c: c[1], reverse=True)
+
+    # 2) Precision: LLM re-rank the top candidates (uses the configured provider).
+    llm_scores: dict[str, float] | None = None
+    top = candidates[: settings.rerank_top_k]
+    if top:
+        llm_scores = await llm.rank_jobs(
+            ptext,
+            [
+                {
+                    "id": str(job.id),
+                    "title": job.title,
+                    "company": job.company,
+                    "location": job.location,
+                    "description": (job.description or "")[:600],
+                }
+                for job, _ in top
+            ],
+        )
+
+    matched = 0
+    auto_tracked: list[str] = []
+    auto_prepare: list[str] = []
+    for job, cos in candidates:
+        score = (llm_scores or {}).get(str(job.id), cos)
+        session.add(
+            JobMatch(user_id=user.id, job_id=job.id, relevance_score=score)
         )
         matched += 1
 
-        if score >= settings.auto_track_threshold:
-            exists = await session.scalar(
-                select(Application.id).where(
+        should_track = score >= settings.auto_track_threshold
+        should_autoapply = auto_enabled and score >= auto_threshold
+        if not (should_track or should_autoapply):
+            continue
+
+        app = (
+            await session.execute(
+                select(Application).where(
                     Application.user_id == user.id, Application.job_id == job.id
                 )
             )
-            if not exists:
-                app = Application(
-                    user_id=user.id,
-                    job_id=job.id,
-                    status=ApplicationStatus.discovered,
+        ).scalar_one_or_none()
+        if app is None:
+            app = Application(
+                user_id=user.id,
+                job_id=job.id,
+                status=ApplicationStatus.discovered,
+            )
+            session.add(app)
+            await session.flush()
+            session.add(
+                ApplicationEvent(
+                    application_id=app.id,
+                    type="created",
+                    payload={"auto": True, "relevance_score": round(score, 4)},
                 )
-                session.add(app)
-                await session.flush()
-                session.add(
-                    ApplicationEvent(
-                        application_id=app.id,
-                        type="created",
-                        payload={"auto": True, "relevance_score": round(score, 4)},
-                    )
+            )
+            auto_tracked.append(job.title)
+
+        # Auto-apply: prepare (tailor -> pre-fill) high-scoring, not-yet-started apps.
+        if should_autoapply and app.status == ApplicationStatus.discovered:
+            session.add(
+                ApplicationEvent(
+                    application_id=app.id,
+                    type="auto_apply_queued",
+                    payload={"relevance_score": round(score, 4)},
                 )
-                auto_tracked.append(job.title)
+            )
+            auto_prepare.append(str(app.id))
     await session.commit()
-    return matched, auto_tracked
+    return matched, auto_tracked, auto_prepare
 
 
 async def _run_discovery() -> dict:
@@ -194,11 +248,21 @@ async def _run_discovery() -> dict:
         )
         users = (await session.execute(select(AppUser))).scalars().all()
         total_matches = 0
+        total_auto_prepared = 0
         from app.services.notify import notify_user
 
         for user in users:
-            matched, auto_tracked = await _match_user(session, user, jobs)
+            matched, auto_tracked, auto_prepare = await _match_user(
+                session, user, jobs
+            )
             total_matches += matched
+            # Auto-apply: kick off tailor -> pre-fill (-> ready_to_submit). The
+            # human still does the final submit (no auto-submit, CLAUDE.md rule).
+            for app_id in auto_prepare:
+                from app.tasks.tailor import tailor_application
+
+                tailor_application.delay(app_id, then_prefill=True)
+            total_auto_prepared += len(auto_prepare)
             if auto_tracked:
                 preview = "; ".join(auto_tracked[:3])
                 more = (
@@ -206,10 +270,13 @@ async def _run_discovery() -> dict:
                     if len(auto_tracked) > 3
                     else ""
                 )
+                extra = (
+                    f" · auto-preparing {len(auto_prepare)}" if auto_prepare else ""
+                )
                 await notify_user(
                     session,
                     user.id,
-                    f"🔎 {len(auto_tracked)} new high-match job(s): {preview}{more}",
+                    f"🔎 {len(auto_tracked)} new high-match job(s): {preview}{more}{extra}",
                 )
     summary = {
         "searches": n_searches,
@@ -218,6 +285,7 @@ async def _run_discovery() -> dict:
         "jobs_total": len(jobs),
         "users": len(users),
         "matches": total_matches,
+        "auto_prepared": total_auto_prepared,
     }
     logger.info("discovery complete: %s", summary)
     return summary

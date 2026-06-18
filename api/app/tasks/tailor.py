@@ -112,5 +112,12 @@ async def _tailor(app_id: uuid.UUID) -> dict:
 
 
 @celery_app.task(name="tailor.run")
-def tailor_application(app_id: str) -> dict:
-    return asyncio.run(_tailor(uuid.UUID(app_id)))
+def tailor_application(app_id: str, then_prefill: bool = False) -> dict:
+    result = asyncio.run(_tailor(uuid.UUID(app_id)))
+    # Auto-apply chain: after tailoring, queue pre-fill on the browser worker
+    # (advances to ready_to_submit). The human still does the final submit.
+    if then_prefill:
+        from app.tasks.prefill import prefill_application
+
+        prefill_application.apply_async(args=[app_id], queue="browser")
+    return result

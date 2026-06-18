@@ -143,6 +143,19 @@ class NotificationSettingsUpdate(BaseModel):
     enabled: bool = True
 
 
+# --- Discovery / auto-apply prefs ---
+class DiscoveryPrefsOut(BaseModel):
+    ksa_only: bool = True
+    auto_apply_enabled: bool = False
+    auto_apply_threshold: float = 0.6
+
+
+class DiscoveryPrefsUpdate(BaseModel):
+    ksa_only: bool = True
+    auto_apply_enabled: bool = False
+    auto_apply_threshold: float = Field(0.6, ge=0.0, le=1.0)
+
+
 # --- Saved searches (Phase 2) ---
 class SavedSearchCreate(BaseModel):
     name: str

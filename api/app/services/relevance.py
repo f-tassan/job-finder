@@ -27,6 +27,26 @@ KSA_TOKENS = (
 )
 
 
+# KSA-specific tokens (no bare "remote" — "Remote, US" must NOT pass).
+_KSA_STRICT = tuple(t for t in KSA_TOKENS if t != "remote")
+
+
+def is_ksa(location: str | None, description: str | None = None) -> bool:
+    """True only if the posting is in Saudi Arabia (or explicitly remote-KSA).
+
+    Conservative: empty/unknown location does NOT pass, and a bare "Remote" with a
+    non-KSA country (e.g. "Remote, US") does NOT pass — we prefer precision when the
+    user asks to limit to Saudi Arabia.
+    """
+    text = " ".join(filter(None, [location, description])).lower()
+    if not text.strip():
+        return False
+    if any(t in text for t in _KSA_STRICT):
+        return True
+    # Allow "remote" only when not tied to another country (e.g. just "Remote").
+    return text.strip() in {"remote", "remote/anywhere", "anywhere", "worldwide"}
+
+
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:
     va, vb = np.asarray(a, dtype=float), np.asarray(b, dtype=float)
     na, nb = np.linalg.norm(va), np.linalg.norm(vb)
