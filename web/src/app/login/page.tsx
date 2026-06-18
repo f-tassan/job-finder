@@ -1,24 +1,33 @@
 "use client";
 
+import { useRouter } from "next/navigation";
 import { useEffect, useState } from "react";
-
-type ApiState = "checking" | "ok" | "down";
+import { useAuth } from "@/lib/auth";
 
 export default function LoginPage() {
+  const { user, loading, signIn } = useAuth();
+  const router = useRouter();
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
-  const [api, setApi] = useState<ApiState>("checking");
+  const [error, setError] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
 
-  // Phase 0: confirm the web app can reach the API through the proxy at /api.
   useEffect(() => {
-    fetch("/api/health")
-      .then((r) => setApi(r.ok ? "ok" : "down"))
-      .catch(() => setApi("down"));
-  }, []);
+    if (!loading && user) router.replace("/dashboard");
+  }, [loading, user, router]);
 
-  function onSubmit(e: React.FormEvent) {
+  async function onSubmit(e: React.FormEvent) {
     e.preventDefault();
-    // Auth is implemented in Phase 1.
+    setError(null);
+    setBusy(true);
+    try {
+      await signIn(email, password);
+      router.replace("/dashboard");
+    } catch (err) {
+      setError(err instanceof Error ? err.message : "Sign in failed");
+    } finally {
+      setBusy(false);
+    }
   }
 
   return (
@@ -40,6 +49,7 @@ export default function LoginPage() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
               placeholder="you@example.com"
               autoComplete="email"
+              required
             />
           </div>
           <div>
@@ -54,34 +64,18 @@ export default function LoginPage() {
               className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm outline-none focus:border-slate-500"
               placeholder="••••••••"
               autoComplete="current-password"
+              required
             />
           </div>
+          {error && <p className="text-sm text-red-600">{error}</p>}
           <button
             type="submit"
-            className="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700"
+            disabled={busy}
+            className="w-full rounded-lg bg-slate-900 px-3 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
           >
-            Sign in
+            {busy ? "Signing in…" : "Sign in"}
           </button>
         </form>
-
-        <div className="mt-6 flex items-center gap-2 text-xs text-slate-500">
-          <span
-            className={
-              "inline-block h-2 w-2 rounded-full " +
-              (api === "ok"
-                ? "bg-green-500"
-                : api === "down"
-                  ? "bg-red-500"
-                  : "bg-amber-400")
-            }
-          />
-          API:&nbsp;
-          {api === "checking"
-            ? "checking…"
-            : api === "ok"
-              ? "reachable at /api"
-              : "unreachable"}
-        </div>
       </div>
     </main>
   );

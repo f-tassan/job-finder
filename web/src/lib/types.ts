@@ -1,0 +1,75 @@
+export type ApplicationStatus =
+  | "discovered"
+  | "drafting"
+  | "ready_to_submit"
+  | "submitted"
+  | "interview"
+  | "offer"
+  | "rejected"
+  | "withdrawn";
+
+export const STATUSES: ApplicationStatus[] = [
+  "discovered",
+  "drafting",
+  "ready_to_submit",
+  "submitted",
+  "interview",
+  "offer",
+  "rejected",
+  "withdrawn",
+];
+
+export const STATUS_LABELS: Record<ApplicationStatus, string> = {
+  discovered: "Discovered",
+  drafting: "Drafting",
+  ready_to_submit: "Ready",
+  submitted: "Submitted",
+  interview: "Interview",
+  offer: "Offer",
+  rejected: "Rejected",
+  withdrawn: "Withdrawn",
+};
+
+export interface User {
+  id: string;
+  email: string;
+  display_name: string | null;
+  is_admin: boolean;
+  created_at: string;
+}
+
+export interface Job {
+  id: string;
+  source: string;
+  title: string;
+  company: string | null;
+  location: string | null;
+  url: string;
+}
+
+export interface Application {
+  id: string;
+  status: ApplicationStatus;
+  notes: string | null;
+  job: Job;
+  cv_version_id: string | null;
+  keyword_coverage: number | null;
+  submitted_at: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface CvVersion {
+  id: string;
+  label: string;
+  original_filename: string | null;
+  parsed: Record<string, unknown> | null;
+  is_default: boolean;
+  created_at: string;
+}
+
+export interface AnswerBank {
+  field: string | null;
+  data: Record<string, unknown>;
+  updated_at: string | null;
+}

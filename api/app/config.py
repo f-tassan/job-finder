@@ -30,6 +30,9 @@ class Settings(BaseSettings):
     domain: str = "localhost"
     public_api_url: str = "/api"
 
+    # --- File storage (docker volume; per-user subpaths) ---
+    files_dir: str = "/data/files"
+
     # --- Auth & seed (Phase 1) ---
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
