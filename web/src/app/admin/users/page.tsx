@@ -49,7 +49,7 @@ export default function AdminUsersPage() {
   if (user && !user.is_admin) {
     return (
       <AppShell>
-        <p className="text-slate-500">Admins only.</p>
+        <p className="text-slate-400">Admins only.</p>
       </AppShell>
     );
   }
@@ -63,7 +63,7 @@ export default function AdminUsersPage() {
           e.preventDefault();
           add.mutate();
         }}
-        className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4"
+        className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4"
       >
         <input
           type="email"
@@ -71,13 +71,13 @@ export default function AdminUsersPage() {
           onChange={(e) => setEmail(e.target.value)}
           placeholder="Email *"
           required
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
         />
         <input
           value={displayName}
           onChange={(e) => setDisplayName(e.target.value)}
           placeholder="Display name"
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
         />
         <input
           type="password"
@@ -86,7 +86,7 @@ export default function AdminUsersPage() {
           placeholder="Password (min 8) *"
           minLength={8}
           required
-          className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
         />
         <label className="flex items-center gap-2 text-sm">
           <input
@@ -99,7 +99,7 @@ export default function AdminUsersPage() {
         <button
           type="submit"
           disabled={add.isPending}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         >
           Add user
         </button>
@@ -113,13 +113,13 @@ export default function AdminUsersPage() {
           {list.data?.map((u) => (
             <li
               key={u.id}
-              className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-3"
+              className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900 p-3"
             >
               <div>
                 <p className="text-sm font-medium">
                   {u.display_name || u.email}
                   {u.is_admin && (
-                    <span className="ml-2 rounded bg-slate-200 px-2 py-0.5 text-xs">
+                    <span className="ml-2 rounded bg-slate-700 px-2 py-0.5 text-xs">
                       admin
                     </span>
                   )}
@@ -129,7 +129,7 @@ export default function AdminUsersPage() {
               {u.id !== user?.id && (
                 <button
                   onClick={() => remove.mutate(u.id)}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-sm text-red-600 hover:bg-red-50"
+                  className="rounded-md border border-slate-700 px-3 py-1.5 text-sm text-red-600 hover:bg-red-950"
                 >
                   Delete
                 </button>

@@ -64,7 +64,7 @@ export default function CvsPage() {
           e.preventDefault();
           if (file) upload.mutate();
         }}
-        className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-200 bg-white p-4"
+        className="mb-6 flex flex-wrap items-end gap-3 rounded-xl border border-slate-800 bg-slate-900 p-4"
       >
         <div>
           <label className="block text-sm font-medium">File</label>
@@ -81,13 +81,13 @@ export default function CvsPage() {
             value={label}
             onChange={(e) => setLabel(e.target.value)}
             placeholder="e.g. Software Engineer CV"
-            className="mt-1 rounded-lg border border-slate-300 px-3 py-2 text-sm"
+            className="mt-1 rounded-lg border border-slate-700 px-3 py-2 text-sm"
           />
         </div>
         <button
           type="submit"
           disabled={!file || upload.isPending}
-          className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+          className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
         >
           {upload.isPending ? "Uploading…" : "Upload"}
         </button>
@@ -101,7 +101,7 @@ export default function CvsPage() {
           {list.data.map((cv) => (
             <li
               key={cv.id}
-              className="flex items-center justify-between rounded-lg border border-slate-200 bg-white p-3"
+              className="flex items-center justify-between rounded-lg border border-slate-800 bg-slate-900 p-3"
             >
               <div>
                 <p className="text-sm font-medium">
@@ -122,21 +122,21 @@ export default function CvsPage() {
               <div className="flex items-center gap-2 text-sm">
                 <button
                   onClick={() => download(cv)}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 hover:bg-slate-100"
+                  className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
                 >
                   Download
                 </button>
                 {!cv.is_default && (
                   <button
                     onClick={() => setDefault.mutate(cv.id)}
-                    className="rounded-md border border-slate-300 px-3 py-1.5 hover:bg-slate-100"
+                    className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
                   >
                     Make default
                   </button>
                 )}
                 <button
                   onClick={() => remove.mutate(cv.id)}
-                  className="rounded-md border border-slate-300 px-3 py-1.5 text-red-600 hover:bg-red-50"
+                  className="rounded-md border border-slate-700 px-3 py-1.5 text-red-600 hover:bg-red-950"
                 >
                   Delete
                 </button>

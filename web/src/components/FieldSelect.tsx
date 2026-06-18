@@ -42,7 +42,7 @@ export function FieldSelect({
             onChange(e.target.value);
           }
         }}
-        className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm"
       >
         <option value="">Select a field…</option>
         {options.map((o) => (
@@ -57,7 +57,7 @@ export function FieldSelect({
           value={value}
           onChange={(e) => onChange(e.target.value)}
           placeholder="Type your field"
-          className="w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+          className="w-full rounded-lg border border-slate-700 px-3 py-2 text-sm"
         />
       )}
     </div>

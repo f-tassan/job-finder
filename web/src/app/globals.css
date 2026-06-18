@@ -3,5 +3,28 @@
 @tailwind utilities;
 
 :root {
-  color-scheme: light dark;
+  color-scheme: dark;
+}
+
+/* Dark form controls with clearly-contrasting text so typed input is readable
+   against the field background (slate-800 field / slate-100 text). */
+input,
+select,
+textarea {
+  background-color: rgb(30 41 59); /* slate-800 */
+  color: rgb(241 245 249); /* slate-100 */
+}
+
+input::placeholder,
+textarea::placeholder {
+  color: rgb(100 116 139); /* slate-500 */
+}
+
+input[type="file"] {
+  color: rgb(203 213 225); /* slate-300 */
+}
+
+select option {
+  color: rgb(241 245 249);
+  background-color: rgb(30 41 59);
 }

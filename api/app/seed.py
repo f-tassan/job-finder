@@ -43,7 +43,7 @@ async def seed_first_user() -> None:
             session,
             email=settings.first_user_email,
             password=settings.first_user_password,
-            display_name="Admin",
+            display_name=settings.first_user_name,
             is_admin=True,
         )
         await session.commit()

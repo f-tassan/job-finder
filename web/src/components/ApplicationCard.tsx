@@ -22,7 +22,7 @@ export function ApplicationCard({
       ref={setNodeRef}
       style={style}
       className={
-        "rounded-lg border border-slate-200 bg-white p-3 shadow-sm " +
+        "rounded-lg border border-slate-800 bg-slate-900 p-3 shadow-sm " +
         (isDragging ? "opacity-60" : "")
       }
     >
@@ -30,7 +30,7 @@ export function ApplicationCard({
         <div {...listeners} {...attributes} className="cursor-grab">
           <p className="text-sm font-medium leading-tight">{app.job.title}</p>
           {app.job.company && (
-            <p className="text-xs text-slate-500">{app.job.company}</p>
+            <p className="text-xs text-slate-400">{app.job.company}</p>
           )}
           {app.job.location && (
             <p className="text-xs text-slate-400">{app.job.location}</p>

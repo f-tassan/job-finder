@@ -25,7 +25,7 @@ export function NavBar() {
   }
 
   return (
-    <header className="border-b border-slate-200 bg-white">
+    <header className="border-b border-slate-800 bg-slate-900">
       <div className="mx-auto flex max-w-6xl items-center gap-6 px-4 py-3">
         <span className="font-semibold">job-finder</span>
         <nav className="flex gap-1 text-sm">
@@ -36,19 +36,19 @@ export function NavBar() {
               className={
                 "rounded-md px-3 py-1.5 " +
                 (pathname?.startsWith(l.href)
-                  ? "bg-slate-900 text-white"
-                  : "text-slate-600 hover:bg-slate-100")
+                  ? "bg-indigo-600 text-white"
+                  : "text-slate-300 hover:bg-slate-800")
               }
             >
               {l.label}
             </Link>
           ))}
         </nav>
-        <div className="ml-auto flex items-center gap-3 text-sm text-slate-500">
+        <div className="ml-auto flex items-center gap-3 text-sm text-slate-400">
           <span>{user?.display_name || user?.email}</span>
           <button
             onClick={handleSignOut}
-            className="rounded-md border border-slate-300 px-3 py-1.5 hover:bg-slate-100"
+            className="rounded-md border border-slate-700 px-3 py-1.5 hover:bg-slate-800"
           >
             Sign out
           </button>

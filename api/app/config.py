@@ -39,6 +39,7 @@ class Settings(BaseSettings):
     access_token_expire_minutes: int = 60 * 24
     first_user_email: str | None = None
     first_user_password: str | None = None
+    first_user_name: str = "Admin"
     max_users: int = 3
 
     # --- External services (later phases) ---

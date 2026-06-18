@@ -37,7 +37,7 @@ function AddApplication() {
     return (
       <button
         onClick={() => setOpen(true)}
-        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700"
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500"
       >
         + Add application
       </button>
@@ -50,44 +50,44 @@ function AddApplication() {
         e.preventDefault();
         if (title.trim()) add.mutate();
       }}
-      className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-white p-3"
+      className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-800 bg-slate-900 p-3"
     >
       <input
         value={title}
         onChange={(e) => setTitle(e.target.value)}
         placeholder="Job title *"
         required
-        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
       />
       <input
         value={company}
         onChange={(e) => setCompany(e.target.value)}
         placeholder="Company"
-        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
       />
       <input
         value={location}
         onChange={(e) => setLocation(e.target.value)}
         placeholder="Location"
-        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
       />
       <input
         value={url}
         onChange={(e) => setUrl(e.target.value)}
         placeholder="URL"
-        className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
+        className="rounded-lg border border-slate-700 px-3 py-2 text-sm"
       />
       <button
         type="submit"
         disabled={add.isPending}
-        className="rounded-lg bg-slate-900 px-4 py-2 text-sm font-medium text-white hover:bg-slate-700 disabled:opacity-50"
+        className="rounded-lg bg-indigo-600 px-4 py-2 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
       >
         Add
       </button>
       <button
         type="button"
         onClick={() => setOpen(false)}
-        className="rounded-lg border border-slate-300 px-4 py-2 text-sm hover:bg-slate-100"
+        className="rounded-lg border border-slate-700 px-4 py-2 text-sm hover:bg-slate-800"
       >
         Cancel
       </button>
