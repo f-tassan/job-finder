@@ -53,8 +53,16 @@ class Settings(BaseSettings):
     imap_password: str | None = None
     imap_folder: str = "INBOX"
 
-    # --- External services (later phases) ---
+    # --- LLM provider (CV parsing + tailoring) ---
+    # "auto" picks OpenAI if OPENAI_API_KEY is set, else Anthropic if its key is
+    # set, else neither (deterministic fallback). Force with "openai"/"anthropic".
+    llm_provider: str = "auto"
     anthropic_api_key: str | None = None
+    openai_api_key: str | None = None
+    openai_tailor_model: str = "gpt-4o"
+    openai_parse_model: str = "gpt-4o-mini"
+
+    # --- External services (later phases) ---
     telegram_bot_token: str | None = None
 
     @property

@@ -9,18 +9,12 @@ Never invents data (CLAUDE.md hard rule): the prompt extracts only what's presen
 """
 from __future__ import annotations
 
-import json
 import logging
 from pathlib import Path
 
-from anthropic import AsyncAnthropic
-
-from app.config import settings
+from app.services import llm
 
 logger = logging.getLogger(__name__)
-
-# Cheap/high-volume model for CV parsing (pinned per CLAUDE.md §1).
-PARSE_MODEL = "claude-haiku-4-5-20251001"
 
 # Structured-output schema. Mirrors the Saudi-national answer bank (CLAUDE.md §6):
 # National ID, no Iqama/visa fields. All optional — extract only what's present.
@@ -111,28 +105,21 @@ def extract_text(file_path: str, filename: str | None) -> str:
         return ""
 
 
+_SYSTEM = (
+    "You extract structured data from CVs. Use ONLY information present in the "
+    "text — never invent or infer beyond what is written. Leave fields null/empty "
+    "if absent."
+)
+
+
 async def parse_cv(file_path: str, filename: str | None) -> dict | None:
     """Return a structured profile dict, or None if parsing is unavailable."""
-    if not settings.anthropic_api_key:
+    if not llm.available():
         return None
-
     text = extract_text(file_path, filename).strip()
     if not text:
         return None
     text = text[:60_000]  # keep well within context / cost bounds
-
-    client = AsyncAnthropic(api_key=settings.anthropic_api_key)
-    try:
-        resp = await client.messages.create(
-            model=PARSE_MODEL,
-            max_tokens=4096,
-            messages=[{"role": "user", "content": _PROMPT + text}],
-            output_config={"format": {"type": "json_schema", "schema": CV_SCHEMA}},
-        )
-        out = next((b.text for b in resp.content if b.type == "text"), None)
-        return json.loads(out) if out else None
-    except Exception:  # noqa: BLE001 - never block the upload on parse failure
-        logger.exception("CV parsing via Claude failed")
-        return None
-    finally:
-        await client.close()
+    return await llm.complete_json(
+        system=_SYSTEM, prompt=_PROMPT + text, schema=CV_SCHEMA, kind="parse"
+    )
