@@ -11,6 +11,7 @@ const QUERY_HINT: Record<Platform, string> = {
   lever: "Lever company slug",
   ashby: "Ashby org slug",
   linkedin: "Keywords, e.g. 'backend engineer' (discovery only)",
+  bayt: "Keywords, e.g. 'accountant' (discovery only; KSA)",
   company_site: "Careers page URL, e.g. https://company.com/careers",
   gov_portals: "(set feed_url in filters)",
   email_alerts: "(uses configured IMAP inbox)",

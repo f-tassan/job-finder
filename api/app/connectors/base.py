@@ -32,6 +32,7 @@ class Connector(ABC):
 def get_connector(platform: str) -> Connector | None:
     from app.connectors import (
         ashby,
+        bayt,
         company_site,
         email_alerts,
         gov_portals,
@@ -45,6 +46,7 @@ def get_connector(platform: str) -> Connector | None:
         "lever": lever.LeverConnector,
         "ashby": ashby.AshbyConnector,
         "linkedin": linkedin.LinkedInConnector,
+        "bayt": bayt.BaytConnector,
         "company_site": company_site.CompanySiteConnector,
         "gov_portals": gov_portals.GovPortalsConnector,
         "email_alerts": email_alerts.EmailAlertsConnector,

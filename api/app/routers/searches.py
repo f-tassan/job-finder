@@ -19,6 +19,7 @@ PLATFORMS = {
     "lever",
     "ashby",
     "linkedin",
+    "bayt",
     "company_site",
     "gov_portals",
     "email_alerts",
