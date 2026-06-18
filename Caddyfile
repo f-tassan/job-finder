@@ -1,0 +1,16 @@
+# Caddy routes the web app and proxies /api to FastAPI, with automatic HTTPS.
+# Set DOMAIN in .env to your real domain before deploying.
+
+{$DOMAIN} {
+	encode gzip
+
+	# API
+	handle_path /api/* {
+		reverse_proxy api:8000
+	}
+
+	# Next.js frontend
+	handle {
+		reverse_proxy web:3000
+	}
+}

@@ -1,0 +1,17 @@
+# Browser worker image. The Playwright base ships Chromium + its system deps;
+# we install the Python app deps on top. Used by the `browser` Celery queue
+# (form pre-fill / human-paced discovery in later phases).
+# noble (Ubuntu 24.04) ships Python 3.12 to match the api image.
+FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
+
+ENV PYTHONUNBUFFERED=1 \
+    PYTHONDONTWRITEBYTECODE=1 \
+    PIP_NO_CACHE_DIR=1
+
+WORKDIR /app
+
+COPY . .
+RUN pip install --upgrade pip && pip install . && chmod +x entrypoint.sh
+
+ENTRYPOINT ["./entrypoint.sh"]
+CMD ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "browser", "-l", "info", "--concurrency=1"]

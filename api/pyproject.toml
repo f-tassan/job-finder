@@ -1,0 +1,33 @@
+[project]
+name = "job-finder-api"
+version = "0.0.0"
+description = "job-finder API (FastAPI + Celery)"
+requires-python = ">=3.12"
+
+# Phase 0 keeps dependencies lean so the image builds fast and every service
+# comes up healthy. Heavier stacks (sentence-transformers, anthropic, weasyprint,
+# playwright) are added in the phase that first needs them, per CLAUDE.md.
+dependencies = [
+    "fastapi>=0.115,<0.116",
+    "uvicorn[standard]>=0.32,<0.33",
+    "pydantic>=2.9,<3",
+    "pydantic-settings>=2.6,<3",
+    "sqlalchemy[asyncio]>=2.0.36,<2.1",
+    "alembic>=1.14,<2",
+    "psycopg[binary]>=3.2,<4",
+    "celery>=5.4,<6",
+    "redis>=5.2,<6",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.3,<9",
+    "httpx>=0.27,<0.28",
+]
+
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[tool.setuptools]
+packages = ["app"]
