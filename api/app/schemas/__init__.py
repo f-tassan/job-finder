@@ -119,6 +119,8 @@ class ApplicationOut(BaseModel):
 
 
 class ApplicationDetailOut(ApplicationOut):
+    cover_letter: str | None = None
+    has_tailored_cv: bool = False
     events: list[ApplicationEventOut] = []
 
 

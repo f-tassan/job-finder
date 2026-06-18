@@ -41,7 +41,7 @@ export default function JobsPage() {
 
   return (
     <AppShell>
-      <div className="mb-4 flex items-center justify-between">
+      <div className="mb-1 flex items-center justify-between">
         <h1 className="text-xl font-semibold">Ranked jobs</h1>
         {user?.is_admin && (
           <button
@@ -53,6 +53,11 @@ export default function JobsPage() {
           </button>
         )}
       </div>
+      <p className="mb-4 text-xs text-slate-400">
+        The % is <span className="font-medium text-slate-300">relevance</span> —
+        how closely the job text matches your profile (fields, skills, summary).
+        Higher = more similar.
+      </p>
       {msg && <p className="mb-4 text-sm text-indigo-300">{msg}</p>}
 
       {feed.isLoading ? (

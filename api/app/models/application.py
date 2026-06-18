@@ -70,6 +70,10 @@ class Application(Base):
         order_by="ApplicationEvent.created_at",
     )
 
+    @property
+    def has_tailored_cv(self) -> bool:
+        return bool(self.tailored_cv_path)
+
 
 class ApplicationEvent(Base):
     __tablename__ = "application_events"

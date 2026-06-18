@@ -47,7 +47,12 @@ def profile_text(field: str | None, data: dict) -> str:
     import json
 
     parts: list[str] = []
-    if field:
+    # Support one or many fields: data["fields"] (list) takes precedence; fall
+    # back to the single top-level `field`.
+    fields = data.get("fields")
+    if isinstance(fields, list) and fields:
+        parts.append("Fields: " + ", ".join(str(f) for f in fields))
+    elif field:
         parts.append(f"Field: {field}")
     for key in (
         "summary",

@@ -3,7 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
-import { FieldSelect } from "@/components/FieldSelect";
+import { MultiFieldSelect } from "@/components/MultiFieldSelect";
 import { apiGet, apiSend } from "@/lib/api";
 import type { AnswerBank } from "@/lib/types";
 
@@ -34,13 +34,20 @@ export default function ProfilePage() {
     queryFn: () => apiGet<AnswerBank>("/profile"),
   });
 
-  const [field, setField] = useState("");
+  const [fields, setFields] = useState<string[]>([]);
   const [values, setValues] = useState<Record<string, string>>({});
   const [saved, setSaved] = useState(false);
 
   useEffect(() => {
     if (!data) return;
-    setField(data.field || "");
+    const stored = (data.data as Record<string, unknown>).fields;
+    if (Array.isArray(stored) && stored.length) {
+      setFields(stored.map(String));
+    } else if (data.field) {
+      setFields([data.field]);
+    } else {
+      setFields([]);
+    }
     const v: Record<string, string> = {};
     for (const f of FIELDS) {
       const raw = (data.data as Record<string, unknown>)[f.key];
@@ -52,11 +59,16 @@ export default function ProfilePage() {
 
   const save = useMutation({
     mutationFn: () => {
-      const cleaned: Record<string, string> = {};
+      const cleaned: Record<string, unknown> = {};
       for (const [k, val] of Object.entries(values)) {
         if (val.trim() !== "") cleaned[k] = val.trim();
       }
-      return apiSend("/profile", "PUT", { field: field || null, data: cleaned });
+      cleaned.fields = fields;
+      // Keep top-level `field` populated (first) for backward compatibility.
+      return apiSend("/profile", "PUT", {
+        field: fields[0] || null,
+        data: cleaned,
+      });
     },
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["profile"] });
@@ -79,11 +91,11 @@ export default function ProfilePage() {
           className="max-w-2xl space-y-5 rounded-xl border border-slate-800 bg-slate-900 p-6"
         >
           <div>
-            <label className="block text-sm font-medium">Field</label>
+            <label className="block text-sm font-medium">Fields</label>
             <p className="mb-1 text-xs text-slate-400">
-              Used to seed searches and weight relevance.
+              Add one or more — used to seed searches and weight relevance.
             </p>
-            <FieldSelect value={field} onChange={setField} />
+            <MultiFieldSelect value={fields} onChange={setFields} />
           </div>
 
           <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">

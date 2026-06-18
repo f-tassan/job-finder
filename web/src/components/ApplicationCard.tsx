@@ -1,6 +1,7 @@
 "use client";
 
 import { useDraggable } from "@dnd-kit/core";
+import Link from "next/link";
 import type { Application } from "@/lib/types";
 
 export function ApplicationCard({
@@ -45,16 +46,24 @@ export function ApplicationCard({
           ✕
         </button>
       </div>
-      {app.job.url && (
-        <a
-          href={app.job.url}
-          target="_blank"
-          rel="noreferrer"
-          className="mt-2 inline-block text-xs text-blue-600 hover:underline"
+      <div className="mt-2 flex items-center gap-3 text-xs">
+        <Link
+          href={`/applications/${app.id}`}
+          className="text-indigo-400 hover:underline"
         >
-          Open posting →
-        </a>
-      )}
+          Details →
+        </Link>
+        {app.job.url && (
+          <a
+            href={app.job.url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            Posting ↗
+          </a>
+        )}
+      </div>
     </div>
   );
 }

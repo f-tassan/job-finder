@@ -30,12 +30,22 @@ class Connector(ABC):
 
 
 def get_connector(platform: str) -> Connector | None:
-    from app.connectors import ashby, email_alerts, gov_portals, greenhouse, lever
+    from app.connectors import (
+        ashby,
+        company_site,
+        email_alerts,
+        gov_portals,
+        greenhouse,
+        lever,
+        linkedin,
+    )
 
     mapping: dict[str, type[Connector]] = {
         "greenhouse": greenhouse.GreenhouseConnector,
         "lever": lever.LeverConnector,
         "ashby": ashby.AshbyConnector,
+        "linkedin": linkedin.LinkedInConnector,
+        "company_site": company_site.CompanySiteConnector,
         "gov_portals": gov_portals.GovPortalsConnector,
         "email_alerts": email_alerts.EmailAlertsConnector,
     }

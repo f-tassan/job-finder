@@ -8,6 +8,7 @@ import uuid
 from datetime import datetime, timezone
 
 from fastapi import APIRouter, Depends, HTTPException, status
+from fastapi.responses import FileResponse
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -143,6 +144,34 @@ async def update_application(
 
     await session.commit()
     return await _owned(session, user.id, app_id, with_events=True)
+
+
+@router.post("/{app_id}/tailor", status_code=status.HTTP_202_ACCEPTED)
+async def tailor_application(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Enqueue tailoring (ATS CV + cover letter) for this application."""
+    await _owned(session, user.id, app_id)
+    from app.tasks.tailor import tailor_application as task
+
+    result = task.delay(str(app_id))
+    return {"task_id": result.id, "status": "queued"}
+
+
+@router.get("/{app_id}/cv")
+async def download_tailored_cv(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    app = await _owned(session, user.id, app_id)
+    if not app.tailored_cv_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No tailored CV yet"
+        )
+    return FileResponse(app.tailored_cv_path, filename="tailored_cv.pdf")
 
 
 @router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT)

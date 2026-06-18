@@ -5,9 +5,15 @@ ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
     PIP_NO_CACHE_DIR=1
 
-# procps: pgrep for the beat healthcheck. curl: convenience/healthchecks.
+# procps: pgrep for the beat healthcheck. curl: healthchecks.
+# The libpango/cairo/gdk-pixbuf stack + fonts are WeasyPrint's native deps for
+# ATS PDF rendering (DejaVu for Latin, Noto for Arabic names).
 RUN apt-get update \
-    && apt-get install -y --no-install-recommends procps curl \
+    && apt-get install -y --no-install-recommends \
+        procps curl \
+        libpango-1.0-0 libpangocairo-1.0-0 libgdk-pixbuf-2.0-0 \
+        libcairo2 libffi8 shared-mime-info \
+        fonts-dejavu-core fonts-noto-core \
     && rm -rf /var/lib/apt/lists/*
 
 WORKDIR /app

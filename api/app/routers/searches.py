@@ -14,7 +14,15 @@ from app.schemas import SavedSearchCreate, SavedSearchOut, SavedSearchUpdate
 
 router = APIRouter(prefix="/searches", tags=["searches"])
 
-PLATFORMS = {"greenhouse", "lever", "ashby", "gov_portals", "email_alerts"}
+PLATFORMS = {
+    "greenhouse",
+    "lever",
+    "ashby",
+    "linkedin",
+    "company_site",
+    "gov_portals",
+    "email_alerts",
+}
 
 
 async def _owned(session: AsyncSession, user_id, search_id) -> SavedSearch:

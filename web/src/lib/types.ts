@@ -59,6 +59,18 @@ export interface Application {
   updated_at: string;
 }
 
+export interface ApplicationEvent {
+  type: string;
+  payload: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ApplicationDetail extends Application {
+  cover_letter: string | null;
+  has_tailored_cv: boolean;
+  events: ApplicationEvent[];
+}
+
 export interface CvVersion {
   id: string;
   label: string;
@@ -84,6 +96,8 @@ export const PLATFORMS = [
   "greenhouse",
   "lever",
   "ashby",
+  "linkedin",
+  "company_site",
   "gov_portals",
   "email_alerts",
 ] as const;
