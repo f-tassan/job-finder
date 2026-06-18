@@ -120,3 +120,38 @@ class ApplicationOut(BaseModel):
 
 class ApplicationDetailOut(ApplicationOut):
     events: list[ApplicationEventOut] = []
+
+
+# --- Saved searches (Phase 2) ---
+class SavedSearchCreate(BaseModel):
+    name: str
+    platform: str  # greenhouse|lever|ashby|gov_portals|email_alerts
+    query: str | None = None
+    filters: dict[str, Any] = {}
+    enabled: bool = True
+
+
+class SavedSearchUpdate(BaseModel):
+    name: str | None = None
+    query: str | None = None
+    filters: dict[str, Any] | None = None
+    enabled: bool | None = None
+
+
+class SavedSearchOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    name: str
+    platform: str
+    query: str | None = None
+    filters: dict[str, Any] = {}
+    enabled: bool
+    last_run_at: datetime | None = None
+
+
+# --- Ranked jobs feed (Phase 2) ---
+class JobMatchOut(BaseModel):
+    job: JobOut
+    relevance_score: float
+    tracked: bool  # whether the user already has an application for this job

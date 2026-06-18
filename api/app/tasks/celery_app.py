@@ -1,12 +1,8 @@
-"""Celery application.
-
-Phase 0 wires the broker/backend and the two queues (`default`, `browser`) so the
-worker, browser-worker, and beat services start cleanly. Tasks are registered in
-later phases.
-"""
+"""Celery application: broker/backend, queues, task registration, Beat schedule."""
 from __future__ import annotations
 
 from celery import Celery
+from celery.schedules import crontab  # noqa: F401 (handy for future schedules)
 
 from app.config import settings
 
@@ -21,7 +17,14 @@ celery_app.conf.update(
     task_acks_late=True,
     worker_prefetch_multiplier=1,
     timezone="UTC",
+    beat_schedule={
+        "discovery-periodic": {
+            "task": "discovery.run",
+            "schedule": settings.discovery_interval_minutes * 60.0,
+        },
+    },
 )
 
-# Task modules are imported here as they are implemented (Phase 2+).
-# celery_app.autodiscover_tasks(["app.tasks"])
+# Import task modules so their @celery_app.task decorators register. Done after
+# celery_app is defined to avoid a circular import.
+from app.tasks import discovery  # noqa: E402,F401

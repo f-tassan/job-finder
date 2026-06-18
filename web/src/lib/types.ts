@@ -73,3 +73,28 @@ export interface AnswerBank {
   data: Record<string, unknown>;
   updated_at: string | null;
 }
+
+export interface JobMatch {
+  job: Job;
+  relevance_score: number;
+  tracked: boolean;
+}
+
+export const PLATFORMS = [
+  "greenhouse",
+  "lever",
+  "ashby",
+  "gov_portals",
+  "email_alerts",
+] as const;
+export type Platform = (typeof PLATFORMS)[number];
+
+export interface SavedSearch {
+  id: string;
+  name: string;
+  platform: Platform;
+  query: string | null;
+  filters: Record<string, unknown>;
+  enabled: boolean;
+  last_run_at: string | null;
+}

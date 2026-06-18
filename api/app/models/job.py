@@ -9,6 +9,7 @@ from __future__ import annotations
 import uuid
 from datetime import datetime
 
+from pgvector.sqlalchemy import Vector
 from sqlalchemy import Float, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column
@@ -30,6 +31,7 @@ class Job(Base):
     description: Mapped[str | None] = mapped_column(Text)
     posted_at: Mapped[datetime | None] = mapped_column()
     raw: Mapped[dict | None] = mapped_column(JSONB)
+    embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
     discovered_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
 

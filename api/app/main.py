@@ -11,7 +11,15 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import applications, auth, cvs, profile, users
+from app.routers import (
+    applications,
+    auth,
+    cvs,
+    jobs,
+    profile,
+    searches,
+    users,
+)
 from app.seed import seed_first_user
 
 
@@ -45,3 +53,5 @@ app.include_router(users.router)
 app.include_router(profile.router)
 app.include_router(cvs.router)
 app.include_router(applications.router)
+app.include_router(searches.router)
+app.include_router(jobs.router)

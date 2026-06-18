@@ -53,6 +53,7 @@ services:
       redis: { condition: service_healthy }
     volumes:
       - files:/data/files
+      - model_cache:/root/.cache   # persist the sentence-transformers model
     healthcheck:
       test: ["CMD-SHELL", "celery -A app.tasks.celery_app inspect ping -d celery@$$HOSTNAME"]
       interval: 15s
@@ -130,5 +131,6 @@ services:
 volumes:
   pgdata:
   files:
+  model_cache:
   caddy_data:
   caddy_config:

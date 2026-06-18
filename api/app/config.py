@@ -42,6 +42,17 @@ class Settings(BaseSettings):
     first_user_name: str = "Admin"
     max_users: int = 3
 
+    # --- Discovery / relevance (Phase 2) ---
+    match_threshold: float = 0.25  # min cosine to record a job_match
+    auto_track_threshold: float = 0.55  # auto-create a `discovered` application
+    discovery_interval_minutes: int = 360  # Celery Beat cadence
+
+    # IMAP (email_alerts connector). Connector returns [] unless these are set.
+    imap_host: str | None = None
+    imap_user: str | None = None
+    imap_password: str | None = None
+    imap_folder: str = "INBOX"
+
     # --- External services (later phases) ---
     anthropic_api_key: str | None = None
     telegram_bot_token: str | None = None
