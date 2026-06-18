@@ -6,12 +6,18 @@ FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
 
 ENV PYTHONUNBUFFERED=1 \
     PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PIP_NO_CACHE_DIR=1 \
+    PLAYWRIGHT_BROWSERS_PATH=/ms-playwright
 
 WORKDIR /app
 
 COPY . .
-RUN pip install --upgrade pip && pip install . && chmod +x entrypoint.sh
+# The base image ships browsers under /ms-playwright but not the playwright pip
+# package in the system python — install it (matching the base browser version).
+RUN pip install --upgrade pip \
+    && pip install "playwright==1.48.0" \
+    && pip install . \
+    && chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]
 CMD ["celery", "-A", "app.tasks.celery_app", "worker", "-Q", "browser", "-l", "info", "--concurrency=1"]

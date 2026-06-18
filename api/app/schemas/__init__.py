@@ -121,7 +121,14 @@ class ApplicationOut(BaseModel):
 class ApplicationDetailOut(ApplicationOut):
     cover_letter: str | None = None
     has_tailored_cv: bool = False
+    prefilled_answers: dict[str, Any] = {}
+    missing_fields: list[Any] = []
+    has_screenshot: bool = False
     events: list[ApplicationEventOut] = []
+
+
+class AnswersUpdate(BaseModel):
+    prefilled_answers: dict[str, Any]
 
 
 # --- Saved searches (Phase 2) ---

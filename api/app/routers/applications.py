@@ -24,6 +24,7 @@ from app.models import (
     Job,
 )
 from app.schemas import (
+    AnswersUpdate,
     ApplicationCreate,
     ApplicationDetailOut,
     ApplicationOut,
@@ -158,6 +159,66 @@ async def tailor_application(
 
     result = task.delay(str(app_id))
     return {"task_id": result.id, "status": "queued"}
+
+
+@router.post("/{app_id}/prefill", status_code=status.HTTP_202_ACCEPTED)
+async def prefill_application(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Enqueue form pre-fill on the browser-worker (fills known fields, flags gaps)."""
+    await _owned(session, user.id, app_id)
+    from app.tasks.prefill import prefill_application as task
+
+    result = task.apply_async(args=[str(app_id)], queue="browser")
+    return {"task_id": result.id, "status": "queued"}
+
+
+@router.patch("/{app_id}/answers", response_model=ApplicationDetailOut)
+async def update_answers(
+    app_id: uuid.UUID,
+    body: AnswersUpdate,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Application:
+    """User completes the gaps left at review."""
+    app = await _owned(session, user.id, app_id)
+    app.prefilled_answers = body.prefilled_answers
+    await session.commit()
+    return await _owned(session, user.id, app_id, with_events=True)
+
+
+@router.post("/{app_id}/submit", response_model=ApplicationDetailOut)
+async def submit_application(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> Application:
+    """Mark the application submitted (the human performs the actual submit)."""
+    app = await _owned(session, user.id, app_id)
+    app.status = ApplicationStatus.submitted
+    if app.submitted_at is None:
+        app.submitted_at = datetime.now(timezone.utc)
+    session.add(
+        ApplicationEvent(application_id=app.id, type="submitted", payload={})
+    )
+    await session.commit()
+    return await _owned(session, user.id, app_id, with_events=True)
+
+
+@router.get("/{app_id}/screenshot")
+async def get_screenshot(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    app = await _owned(session, user.id, app_id)
+    if not app.screenshot_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No screenshot yet"
+        )
+    return FileResponse(app.screenshot_path, media_type="image/png")
 
 
 @router.get("/{app_id}/cv")

@@ -68,6 +68,9 @@ export interface ApplicationEvent {
 export interface ApplicationDetail extends Application {
   cover_letter: string | null;
   has_tailored_cv: boolean;
+  prefilled_answers: Record<string, string>;
+  missing_fields: string[];
+  has_screenshot: boolean;
   events: ApplicationEvent[];
 }
 

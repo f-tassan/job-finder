@@ -74,6 +74,10 @@ class Application(Base):
     def has_tailored_cv(self) -> bool:
         return bool(self.tailored_cv_path)
 
+    @property
+    def has_screenshot(self) -> bool:
+        return bool(self.screenshot_path)
+
 
 class ApplicationEvent(Base):
     __tablename__ = "application_events"
