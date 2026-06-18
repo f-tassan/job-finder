@@ -131,6 +131,18 @@ class AnswersUpdate(BaseModel):
     prefilled_answers: dict[str, Any]
 
 
+# --- Notification settings (Phase 5) ---
+class NotificationSettingsOut(BaseModel):
+    telegram_chat_id: str | None = None
+    enabled: bool = True
+    telegram_configured: bool = False  # is the server bot token set?
+
+
+class NotificationSettingsUpdate(BaseModel):
+    telegram_chat_id: str | None = None
+    enabled: bool = True
+
+
 # --- Saved searches (Phase 2) ---
 class SavedSearchCreate(BaseModel):
     name: str

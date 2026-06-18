@@ -95,6 +95,15 @@ async def _tailor(app_id: uuid.UUID) -> dict:
             )
         )
         await session.commit()
+
+        from app.services.notify import notify_user
+
+        await notify_user(
+            session,
+            app.user_id,
+            f"📝 Tailored CV + cover letter ready: {job.title}"
+            + (f" at {job.company}" if job.company else ""),
+        )
     return {
         "application_id": str(app_id),
         "used_llm": result["used_llm"],

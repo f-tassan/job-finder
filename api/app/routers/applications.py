@@ -204,6 +204,15 @@ async def submit_application(
         ApplicationEvent(application_id=app.id, type="submitted", payload={})
     )
     await session.commit()
+
+    from app.services.notify import notify_user
+
+    job = await session.get(Job, app.job_id)
+    await notify_user(
+        session,
+        user.id,
+        f"📨 Submitted: {job.title}" + (f" at {job.company}" if job.company else ""),
+    )
     return await _owned(session, user.id, app_id, with_events=True)
 
 

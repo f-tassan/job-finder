@@ -89,6 +89,12 @@ export interface AnswerBank {
   updated_at: string | null;
 }
 
+export interface NotificationSettings {
+  telegram_chat_id: string | null;
+  enabled: boolean;
+  telegram_configured: boolean;
+}
+
 export interface JobMatch {
   job: Job;
   relevance_score: number;

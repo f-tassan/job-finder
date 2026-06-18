@@ -44,6 +44,7 @@ class AnswerBank(Base):
     )
     field: Mapped[str | None] = mapped_column(Text)
     data: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
+    notifications: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
     updated_at: Mapped[datetime] = mapped_column(
         server_default=func.now(), onupdate=func.now()

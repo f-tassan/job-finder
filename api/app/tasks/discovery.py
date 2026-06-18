@@ -102,17 +102,19 @@ async def _embed_new_jobs(session: AsyncSession) -> int:
     return len(rows)
 
 
-async def _match_user(session: AsyncSession, user: AppUser, jobs: list[Job]) -> int:
+async def _match_user(
+    session: AsyncSession, user: AppUser, jobs: list[Job]
+) -> tuple[int, list[str]]:
     bank = (
         await session.execute(
             select(AnswerBank).where(AnswerBank.user_id == user.id)
         )
     ).scalar_one_or_none()
     if bank is None:
-        return 0
+        return 0, []
     ptext = embeddings.profile_text(bank.field, bank.data or {})
     if not ptext.strip():
-        return 0
+        return 0, []
     pemb = embeddings.embed(ptext)
     bank.embedding = pemb
 
@@ -130,6 +132,7 @@ async def _match_user(session: AsyncSession, user: AppUser, jobs: list[Job]) -> 
     ]
 
     matched = 0
+    auto_tracked: list[str] = []
     for job in jobs:
         if filter_sets and not any(
             relevance.passes_hard_filters(
@@ -175,8 +178,9 @@ async def _match_user(session: AsyncSession, user: AppUser, jobs: list[Job]) -> 
                         payload={"auto": True, "relevance_score": round(score, 4)},
                     )
                 )
+                auto_tracked.append(job.title)
     await session.commit()
-    return matched
+    return matched, auto_tracked
 
 
 async def _run_discovery() -> dict:
@@ -190,8 +194,23 @@ async def _run_discovery() -> dict:
         )
         users = (await session.execute(select(AppUser))).scalars().all()
         total_matches = 0
+        from app.services.notify import notify_user
+
         for user in users:
-            total_matches += await _match_user(session, user, jobs)
+            matched, auto_tracked = await _match_user(session, user, jobs)
+            total_matches += matched
+            if auto_tracked:
+                preview = "; ".join(auto_tracked[:3])
+                more = (
+                    f" (+{len(auto_tracked) - 3} more)"
+                    if len(auto_tracked) > 3
+                    else ""
+                )
+                await notify_user(
+                    session,
+                    user.id,
+                    f"🔎 {len(auto_tracked)} new high-match job(s): {preview}{more}",
+                )
     summary = {
         "searches": n_searches,
         "fetched": fetched,

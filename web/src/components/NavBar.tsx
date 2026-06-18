@@ -10,6 +10,7 @@ const LINKS = [
   { href: "/searches", label: "Searches" },
   { href: "/profile", label: "Profile" },
   { href: "/cvs", label: "CVs" },
+  { href: "/settings", label: "Settings" },
 ];
 
 export function NavBar() {

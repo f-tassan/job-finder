@@ -26,6 +26,7 @@ CREATE TABLE answer_bank (
     user_id    UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
     field      TEXT,                              -- selectable-or-free-text job field
     data       JSONB NOT NULL DEFAULT '{}'::jsonb, -- national_id, city, education, salaries, etc.
+    notifications JSONB NOT NULL DEFAULT '{}'::jsonb, -- telegram_chat_id, enabled, etc.
     embedding  vector(384),                       -- profile embedding (all-MiniLM-L6-v2)
     updated_at TIMESTAMPTZ NOT NULL DEFAULT now(),
     UNIQUE (user_id)

@@ -18,6 +18,7 @@ from app.routers import (
     jobs,
     profile,
     searches,
+    settings,
     users,
 )
 from app.seed import seed_first_user
@@ -55,3 +56,4 @@ app.include_router(cvs.router)
 app.include_router(applications.router)
 app.include_router(searches.router)
 app.include_router(jobs.router)
+app.include_router(settings.router)

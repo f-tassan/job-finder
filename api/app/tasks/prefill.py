@@ -98,6 +98,16 @@ async def _prefill(app_id: uuid.UUID) -> dict:
             )
         )
         await session.commit()
+
+        from app.services.notify import notify_user
+
+        n_missing = len(result.get("missing", []))
+        await notify_user(
+            session,
+            app.user_id,
+            f"🧩 Ready to review: {job.title} — pre-filled "
+            f"{len(result.get('filled', {}))} field(s), {n_missing} to complete.",
+        )
     return {
         "application_id": str(app_id),
         "filled": len(result.get("filled", {})),
