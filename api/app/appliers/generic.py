@@ -3,6 +3,11 @@
 Works on most static application forms. Fills text/email/tel/url inputs and
 textareas whose label maps to a known answer-bank value; leaves sensitive and
 unknown-but-required fields blank and reports them as missing.
+
+The field sweep is factored into `_sweep(root, values)` so platform adapters can
+run it against an iframe `Frame` (SuccessFactors / Taleo) instead of the top
+`Page`. Both Playwright `Page` and `Frame` expose `query_selector*`, so the same
+code works on either.
 """
 from __future__ import annotations
 
@@ -16,30 +21,43 @@ logger = logging.getLogger(__name__)
 _FILLABLE_TYPES = {"text", "email", "tel", "url", "search", ""}
 
 
-async def _label_blob(page: Any, el: Any) -> str:
+async def _label_blob(root: Any, el: Any) -> str:
     name = (await el.get_attribute("name")) or ""
     el_id = (await el.get_attribute("id")) or ""
     placeholder = (await el.get_attribute("placeholder")) or ""
     aria = (await el.get_attribute("aria-label")) or ""
+    auto = (await el.get_attribute("data-automation-id")) or ""
     label_text = ""
     if el_id:
         try:
-            lbl = await page.query_selector(f'label[for="{el_id}"]')
+            lbl = await root.query_selector(f'label[for="{el_id}"]')
             if lbl:
                 label_text = (await lbl.inner_text()) or ""
         except Exception:  # noqa: BLE001
             pass
-    return " ".join([name, el_id, placeholder, aria, label_text]).strip()
+    return " ".join([name, el_id, placeholder, aria, auto, label_text]).strip()
 
 
 class GenericApplier(Applier):
     name = "generic"
 
-    async def prefill(self, page: Any, values: dict[str, str]) -> PrefillResult:
+    async def _sweep(
+        self,
+        root: Any,
+        values: dict[str, str],
+        already_filled: set[str] | None = None,
+    ) -> PrefillResult:
+        """Fill mappable text fields under `root` (a Page or Frame).
+
+        `already_filled` holds answer-bank keys a platform adapter already placed
+        via a precise selector; we don't fill them again, and we don't re-flag a
+        value-less heuristic match for them as missing.
+        """
+        already_filled = already_filled or set()
         filled: dict[str, str] = {}
         missing: list[str] = []
         try:
-            elements = await page.query_selector_all(
+            elements = await root.query_selector_all(
                 "input:not([type=hidden]):not([type=submit]):not([type=button])"
                 ":not([type=checkbox]):not([type=radio]):not([type=file]), textarea"
             )
@@ -54,7 +72,7 @@ class GenericApplier(Applier):
                 tag = (await el.evaluate("e => e.tagName")).lower()
                 if tag != "textarea" and typ not in _FILLABLE_TYPES:
                     continue
-                blob = await _label_blob(page, el)
+                blob = await _label_blob(root, el)
                 label = blob[:80] or (await el.get_attribute("name")) or "field"
                 required = (
                     (await el.get_attribute("required")) is not None
@@ -67,7 +85,14 @@ class GenericApplier(Applier):
                     continue
 
                 key = match_field(blob)
+                if key in already_filled:
+                    continue
+                # Don't refill a field that already has a value (adapter or the
+                # user's own browser session may have populated it).
                 if key and values.get(key):
+                    existing = await el.get_attribute("value")
+                    if existing:
+                        continue
                     await el.fill(values[key])
                     filled[label] = values[key]
                 elif required:
@@ -75,3 +100,14 @@ class GenericApplier(Applier):
             except Exception:  # noqa: BLE001 - one bad field shouldn't abort
                 logger.debug("field prefill skipped", exc_info=True)
         return PrefillResult(filled=filled, missing=missing)
+
+    async def prefill(
+        self,
+        page: Any,
+        values: dict[str, str],
+        *,
+        credentials: dict[str, str] | None = None,
+        save_draft: bool = False,
+    ) -> PrefillResult:
+        # Static forms have no account/draft concept; credentials are ignored.
+        return await self._sweep(page, values)

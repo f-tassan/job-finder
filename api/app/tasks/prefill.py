@@ -44,6 +44,12 @@ async def _prefill(app_id: uuid.UUID) -> dict:
         values = candidate_values(data)
         applier = get_applier(job.source, job.url)
 
+        # If the user saved a login for this employer portal, sign in and save a
+        # draft on their account (never submit). Otherwise just rehearse-fill.
+        from app.services.credentials import credentials_for_url
+
+        credentials = await credentials_for_url(session, app.user_id, job.url)
+
         shot_path = str(
             Path(settings.files_dir) / str(app.user_id) / "prefill" / f"{app.id}.png"
         )
@@ -69,7 +75,12 @@ async def _prefill(app_id: uuid.UUID) -> dict:
                         job.url, wait_until="domcontentloaded", timeout=30000
                     )
                     await page.wait_for_timeout(1000)
-                    result = await applier.prefill(page, values)
+                    result = await applier.prefill(
+                        page,
+                        values,
+                        credentials=credentials,
+                        save_draft=bool(credentials),
+                    )
                 except Exception as exc:  # noqa: BLE001
                     error = str(exc)[:300]
                     logger.exception("prefill navigation/fill failed")
@@ -81,6 +92,7 @@ async def _prefill(app_id: uuid.UUID) -> dict:
             finally:
                 await browser.close()
 
+        draft_saved = bool(result.get("draft_saved"))
         app.prefilled_answers = result.get("filled", {})
         app.missing_fields = result.get("missing", [])
         if app.status in (ApplicationStatus.discovered, ApplicationStatus.drafting):
@@ -88,11 +100,13 @@ async def _prefill(app_id: uuid.UUID) -> dict:
         session.add(
             ApplicationEvent(
                 application_id=app.id,
-                type="prefilled",
+                type="draft_saved" if draft_saved else "prefilled",
                 payload={
                     "applier": applier.name,
                     "filled": len(result.get("filled", {})),
                     "missing": len(result.get("missing", [])),
+                    "logged_in": bool(result.get("logged_in")),
+                    "draft_saved": draft_saved,
                     "error": error,
                 },
             )
@@ -101,13 +115,20 @@ async def _prefill(app_id: uuid.UUID) -> dict:
 
         from app.services.notify import notify_user
 
+        n_filled = len(result.get("filled", {}))
         n_missing = len(result.get("missing", []))
-        await notify_user(
-            session,
-            app.user_id,
-            f"🧩 Ready to review: {job.title} — pre-filled "
-            f"{len(result.get('filled', {}))} field(s), {n_missing} to complete.",
-        )
+        if draft_saved:
+            msg = (
+                f"📝 Draft saved on the employer portal: {job.title} — "
+                f"{n_filled} field(s) filled on your account, {n_missing} to "
+                "complete. Log in and submit when ready."
+            )
+        else:
+            msg = (
+                f"🧩 Ready to review: {job.title} — pre-filled "
+                f"{n_filled} field(s), {n_missing} to complete."
+            )
+        await notify_user(session, app.user_id, msg)
     return {
         "application_id": str(app_id),
         "filled": len(result.get("filled", {})),

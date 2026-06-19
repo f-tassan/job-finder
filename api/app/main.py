@@ -14,6 +14,7 @@ from fastapi.middleware.cors import CORSMiddleware
 from app.routers import (
     applications,
     auth,
+    credentials,
     cvs,
     jobs,
     profile,
@@ -57,3 +58,4 @@ app.include_router(applications.router)
 app.include_router(searches.router)
 app.include_router(jobs.router)
 app.include_router(settings.router)
+app.include_router(credentials.router)

@@ -37,6 +37,11 @@ class Settings(BaseSettings):
     jwt_secret: str = "change-me"
     jwt_algorithm: str = "HS256"
     access_token_expire_minutes: int = 60 * 24
+    # Fernet key (urlsafe-b64, 32 bytes) used to encrypt portal credentials at
+    # rest. Generate with: python -c "from cryptography.fernet import Fernet;
+    # print(Fernet.generate_key().decode())". If unset, a key is derived from
+    # jwt_secret (works, but rotate both together).
+    credentials_key: str | None = None
     first_user_email: str | None = None
     first_user_password: str | None = None
     first_user_name: str = "Admin"

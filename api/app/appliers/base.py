@@ -87,12 +87,29 @@ class Applier(ABC):
     name: str
 
     @abstractmethod
-    async def prefill(self, page: Any, values: dict[str, str]) -> PrefillResult:
+    async def prefill(
+        self,
+        page: Any,
+        values: dict[str, str],
+        *,
+        credentials: dict[str, str] | None = None,
+        save_draft: bool = False,
+    ) -> PrefillResult:
+        """Fill the form. If `credentials` (the user's own portal login) are
+        given and `save_draft` is set, an enterprise applier may sign in and save
+        a draft — never submit. Other appliers ignore both."""
         raise NotImplementedError
 
 
 def get_applier(source: str | None, url: str | None) -> "Applier":
-    from app.appliers import generic, greenhouse, lever
+    from app.appliers import (
+        generic,
+        greenhouse,
+        lever,
+        oracle,
+        successfactors,
+        workday,
+    )
 
     u = (url or "").lower()
     s = (source or "").lower()
@@ -100,4 +117,20 @@ def get_applier(source: str | None, url: str | None) -> "Applier":
         return greenhouse.GreenhouseApplier()
     if s == "lever" or "lever.co" in u:
         return lever.LeverApplier()
+    if s == "workday" or "myworkdayjobs.com" in u or ".workday.com" in u:
+        return workday.WorkdayApplier()
+    if (
+        s == "successfactors"
+        or "successfactors." in u
+        or "sapsf." in u
+        or "jobs.sap.com" in u
+    ):
+        return successfactors.SuccessFactorsApplier()
+    if (
+        s == "oracle"
+        or "taleo.net" in u
+        or "/hcmui/candidateexperience" in u
+        or "oraclecloud.com" in u
+    ):
+        return oracle.OracleApplier()
     return generic.GenericApplier()

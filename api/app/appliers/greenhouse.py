@@ -10,7 +10,14 @@ from app.appliers.generic import GenericApplier
 class GreenhouseApplier(GenericApplier):
     name = "greenhouse"
 
-    async def prefill(self, page: Any, values: dict[str, str]) -> PrefillResult:
+    async def prefill(
+        self,
+        page: Any,
+        values: dict[str, str],
+        *,
+        credentials: dict[str, str] | None = None,
+        save_draft: bool = False,
+    ) -> PrefillResult:
         # Some boards hide the form behind an "Apply" button; reveal it if present.
         for sel in (
             'a:has-text("Apply")',

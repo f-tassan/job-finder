@@ -10,7 +10,14 @@ from app.appliers.generic import GenericApplier
 class LeverApplier(GenericApplier):
     name = "lever"
 
-    async def prefill(self, page: Any, values: dict[str, str]) -> PrefillResult:
+    async def prefill(
+        self,
+        page: Any,
+        values: dict[str, str],
+        *,
+        credentials: dict[str, str] | None = None,
+        save_draft: bool = False,
+    ) -> PrefillResult:
         # Lever postings link to a dedicated /apply page with the form.
         try:
             url = page.url

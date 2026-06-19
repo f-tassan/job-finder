@@ -143,6 +143,27 @@ class NotificationSettingsUpdate(BaseModel):
     enabled: bool = True
 
 
+# --- Portal credentials (per-user, per-tenant ATS logins) ---
+class PortalCredentialOut(BaseModel):
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    host: str
+    username: str
+    label: str | None = None
+    created_at: datetime
+    updated_at: datetime
+    # The password is never serialized; this flag just confirms one is stored.
+    has_secret: bool = True
+
+
+class PortalCredentialUpsert(BaseModel):
+    host: str = Field(min_length=3)
+    username: str = Field(min_length=1)
+    password: str = Field(min_length=1)
+    label: str | None = None
+
+
 # --- Discovery / auto-apply prefs ---
 class DiscoveryPrefsOut(BaseModel):
     ksa_only: bool = True

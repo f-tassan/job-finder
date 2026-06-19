@@ -54,6 +54,21 @@ CREATE TABLE saved_searches (
     last_run_at TIMESTAMPTZ
 );
 
+-- Per-user, per-tenant ATS logins (the user's OWN account on each employer's
+-- Workday/SuccessFactors/Taleo). secret = Fernet ciphertext, never returned by
+-- the API. Used by the prefill task to sign in and save a draft application.
+CREATE TABLE portal_credentials (
+    id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id     UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    host        TEXT NOT NULL,                   -- tenant domain, e.g. acme.wd1.myworkdayjobs.com
+    username    TEXT NOT NULL,
+    secret      TEXT NOT NULL,                   -- encrypted password (Fernet)
+    label       TEXT,
+    created_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    updated_at  TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, host)
+);
+
 -- Shared, deduplicated job catalog. No per-user columns here.
 CREATE TABLE jobs (
     id            UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
