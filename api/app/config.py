@@ -48,6 +48,16 @@ class Settings(BaseSettings):
     rerank_top_k: int = 40  # top cosine candidates to LLM re-rank per user
     discovery_interval_minutes: int = 360  # Celery Beat cadence
 
+    # --- LinkedIn discovery hardening (avoid rate-limit / blocking) ---
+    # Comma-separated proxy URLs (e.g. "http://user:pass@host:port,http://..."),
+    # rotated per request. Empty = direct connection.
+    linkedin_proxies: str = ""
+    linkedin_min_delay: float = 3.0   # min seconds between LinkedIn requests
+    linkedin_max_delay: float = 7.0   # max seconds between LinkedIn requests
+    linkedin_max_requests: int = 120  # hard cap on LinkedIn requests per run
+    linkedin_max_retries: int = 3     # retries on 429/999/403 (with backoff)
+    linkedin_backoff_base: float = 20.0  # base backoff seconds (x attempt)
+
     # IMAP (email_alerts connector). Connector returns [] unless these are set.
     imap_host: str | None = None
     imap_user: str | None = None
