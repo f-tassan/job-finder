@@ -59,6 +59,22 @@ class CompanySiteConnector(Connector):
         if not urls:
             return []
 
+        # Render mode (default): JS career portals (Workday/Taleo/…) need a real
+        # browser. Delegate to the browser-worker render task. Set filters.render
+        # = false to use the fast static httpx path instead.
+        if filters.get("render", True):
+            from app.tasks.render import render_careers
+
+            result = render_careers.apply_async(
+                args=[urls], kwargs={"cap": 200}, queue="browser"
+            )
+            try:
+                return await asyncio.to_thread(
+                    result.get, timeout=900, disable_sync_subtasks=False
+                )
+            except Exception:  # noqa: BLE001 - fall back to static fetch
+                pass
+
         jobs: list[dict] = []
         seen: set[str] = set()
         async with httpx.AsyncClient(

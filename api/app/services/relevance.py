@@ -6,6 +6,7 @@ similarity between the user's profile embedding and the job embedding.
 """
 from __future__ import annotations
 
+import re
 from typing import Iterable
 
 import numpy as np
@@ -45,6 +46,47 @@ def is_ksa(location: str | None, description: str | None = None) -> bool:
         return True
     # Allow "remote" only when not tied to another country (e.g. just "Remote").
     return text.strip() in {"remote", "remote/anywhere", "anywhere", "worldwide"}
+
+
+# Obviously-foreign location signals. Used to drop null-location company_site
+# postings (PIF's global portfolio companies list mostly non-KSA roles) whose
+# title carries a city/state/country, e.g. "… Austin, TX" or "… Singapore".
+_FOREIGN_TOKENS = (
+    # countries / regions
+    "united states", "usa", "u.s.", "canada", "mexico", "brazil", "argentina",
+    "united kingdom", "england", "scotland", "ireland", "france", "germany",
+    "spain", "italy", "netherlands", "switzerland", "sweden", "norway", "poland",
+    "china", "japan", "korea", "singapore", "india", "pakistan", "bangladesh",
+    "indonesia", "malaysia", "thailand", "vietnam", "philippines", "australia",
+    "new zealand", "south africa", "nigeria", "kenya", "turkey", "egypt",
+    # major non-KSA cities
+    "london", "paris", "berlin", "munich", "amsterdam", "zurich", "dublin",
+    "new york", "san francisco", "los angeles", "austin", "seattle", "boston",
+    "chicago", "houston", "dallas", "atlanta", "denver", "plantation",
+    "princeton", "toronto", "vancouver", "shanghai", "beijing", "shenzhen",
+    "hong kong", "tokyo", "seoul", "mumbai", "bangalore", "bengaluru", "delhi",
+    "hyderabad", "sydney", "melbourne", "dubai", "abu dhabi",
+)
+# US state abbreviations — matched only as standalone tokens to avoid false hits.
+_FOREIGN_ABBR = (
+    "tx", "fl", "ny", "ca", "wa", "ma", "il", "ga", "co", "nj", "pa", "az",
+    "nc", "va", "oh", "mi", "or", "nv", "ut", "mn", "uk", "us",
+)
+_ABBR_RE = re.compile(r"\b(" + "|".join(_FOREIGN_ABBR) + r")\b", re.IGNORECASE)
+
+
+def mentions_non_ksa(text: str | None) -> bool:
+    """True if the text clearly names a non-KSA location.
+
+    Conservative: only fires on an explicit foreign city/state/country so that
+    null-location KSA jobs (which usually name no place) are kept.
+    """
+    if not text:
+        return False
+    low = text.lower()
+    if any(t in low for t in _FOREIGN_TOKENS):
+        return True
+    return bool(_ABBR_RE.search(low))
 
 
 def cosine_similarity(a: Iterable[float], b: Iterable[float]) -> float:

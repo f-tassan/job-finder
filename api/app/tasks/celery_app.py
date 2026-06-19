@@ -27,4 +27,4 @@ celery_app.conf.update(
 
 # Import task modules so their @celery_app.task decorators register. Done after
 # celery_app is defined to avoid a circular import.
-from app.tasks import discovery, prefill, tailor  # noqa: E402,F401
+from app.tasks import discovery, prefill, render, tailor  # noqa: E402,F401

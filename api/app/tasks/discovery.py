@@ -148,8 +148,17 @@ async def _match_user(
     # 1) Recall: cosine over all jobs passing KSA + saved-search hard filters.
     candidates: list[tuple[Job, float]] = []
     for job in jobs:
-        if ksa_only and not relevance.is_ksa(job.location, job.description):
-            continue
+        # KSA filter:
+        #  - jobs WITH a location must be in Saudi Arabia;
+        #  - null-location jobs (user-curated company_site careers pages) are kept,
+        #    EXCEPT when the title clearly names a foreign place (PIF's global
+        #    portfolio companies list mostly non-KSA roles, e.g. "… Austin, TX").
+        if ksa_only:
+            if job.location:
+                if not relevance.is_ksa(job.location, job.description):
+                    continue
+            elif relevance.mentions_non_ksa(job.title):
+                continue
         if filter_sets and not any(
             relevance.passes_hard_filters(
                 title=job.title,
