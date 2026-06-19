@@ -83,10 +83,18 @@ _STOP_TEXT = {
     "join", "explore", "see all", "sitemap", "site map", "talent network",
     "join the talent network", "learning & development",
     "learning and development", "contact us", "read more", "learn more",
+    "students", "graduates", "early talent", "early careers",
+    "social recruitment", "intern recruitment", "campus recruitment",
+    "banco de talentos", "talent pool", "talent community", "register",
+    "sign in", "log in", "internships", "graduate program",
 }
 _STOP_SUBSTR = ("life at ", "why ", "meet the team", "faq", "our culture",
                 "about us", "benefits", "explore ", "view all", "talent network",
-                "sitemap", "learning & development", "learning and development")
+                "sitemap", "learning & development", "learning and development",
+                "careers at ", "talent community", "banco de talentos")
+# Title endings that mark a section/landing link, not a posting
+# (e.g. "WELL COMPLETIONS CAREERS", "Social Recruitment").
+_STOP_SUFFIX = (" careers", " career", " recruitment", " openings", " vacancies")
 # Listing-root paths that aren't a specific posting.
 _LISTING_ROOTS = {"/careers", "/careers/", "/jobs", "/jobs/", "/career",
                   "/career/", "/en/careers", "/en/careers/", "/vacancies",
@@ -99,6 +107,8 @@ def _is_job(href: str, text: str) -> bool:
     if not any(k in h for k in _HINTS):
         return False
     if len(t) < 6 or t in _STOP_TEXT or any(s in t for s in _STOP_SUBSTR):
+        return False
+    if t.endswith(_STOP_SUFFIX):
         return False
     # Must be a SPECIFIC posting, not the careers/jobs landing page itself.
     from urllib.parse import urlparse
