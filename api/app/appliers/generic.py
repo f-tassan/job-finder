@@ -538,41 +538,53 @@ class GenericApplier(Applier):
 
     async def submit_verification_code(self, page: Any, code: str) -> bool:
         """Type an emailed one-time code into the verification field(s) and click
-        submit again. Handles both a single OTP input and N single-char boxes.
-        Returns True if the code was entered and submit re-clicked."""
+        submit again. Handles both N single-char boxes (Greenhouse renders
+        #security-input-0..N, maxlength=1) and a single OTP input.
+
+        Only EMPTY fields are touched — the application form is still on the page
+        at this step, so we must never overwrite the already-filled name/email/
+        phone. Returns True if the code was entered and submit re-clicked."""
         code = (code or "").strip()
         if not code:
             return False
-        try:
-            sel = (
-                'input[autocomplete="one-time-code"], input[name*="code" i], '
-                'input[id*="code" i], input[inputmode="numeric"], '
-                'input[maxlength="1"], input[type="tel"]'
-            )
-            inputs = [
-                el for el in await page.query_selector_all(sel) if await el.is_visible()
-            ]
-            if not inputs:  # fall back to any visible text input on the screen
-                inputs = [
-                    el
-                    for el in await page.query_selector_all(
-                        'input[type="text"], input:not([type])'
-                    )
-                    if await el.is_visible()
-                ]
-            if not inputs:
+
+        async def _empty_visible(el: Any) -> bool:
+            try:
+                return await el.is_visible() and not (await el.get_attribute("value"))
+            except Exception:  # noqa: BLE001
                 return False
-            if len(inputs) > 1 and len(inputs) >= len(code):
-                for el, ch in zip(inputs, code):  # one box per character
+
+        try:
+            # Per-character boxes: empty, visible, single-char inputs.
+            boxes = [
+                el
+                for el in await page.query_selector_all('input[maxlength="1"]')
+                if await _empty_visible(el)
+            ]
+            if boxes:
+                for el, ch in zip(boxes, code):  # one char per box, in order
                     await el.fill(ch)
-            elif len(inputs) == 1:
-                await inputs[0].fill(code)
-            else:  # fewer boxes than chars: type into the first, let it auto-advance
-                await inputs[0].click()
-                await inputs[0].type(code, delay=60)
+                    await page.wait_for_timeout(40)
+            else:
+                # Single OTP field — try specific code selectors, empty only.
+                single = None
+                for sel in (
+                    'input[autocomplete="one-time-code"]',
+                    'input[name*="code" i]',
+                    'input[id*="code" i]',
+                    'input[id*="security" i]',
+                    'input[inputmode="numeric"]',
+                ):
+                    el = await page.query_selector(sel)
+                    if el and await _empty_visible(el):
+                        single = el
+                        break
+                if single is None:
+                    return False
+                await single.fill(code)
             await page.wait_for_timeout(600)
             await self.submit(page)
-            await page.wait_for_timeout(2500)
+            await page.wait_for_timeout(3000)
             return True
         except Exception:  # noqa: BLE001
             logger.debug("verification code entry failed", exc_info=True)
