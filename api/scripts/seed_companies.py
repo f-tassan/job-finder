@@ -55,10 +55,9 @@ COMPANIES: dict[str, tuple[list[str], bool]] = {
         ],
         True,
     ),
-    # Unlabeled Oracle portal the user provided — rename once identified.
-    "Oracle portal CX_1001 (rename)": (
+    "Tarshid": (
         ["https://ekqz.fa.em2.oraclecloud.com/hcmUI/CandidateExperience/en/sites/CX_1001/jobs"],
-        False,
+        True,
     ),
     "SAMI": (
         ["https://sami.jobs.hr.cloud.sap/search/?createNewAlert=false&q=&searchResultView=LIST"],
