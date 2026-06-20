@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import time
 import uuid
 from pathlib import Path
 
@@ -115,6 +116,8 @@ async def _submit(app_id: uuid.UUID) -> dict:
         clicked = False
         confirmed = False
         needs_verification = False
+        otp_asked = False
+        otp_code_received = False
         error: str | None = None
 
         from playwright.async_api import async_playwright
@@ -163,6 +166,43 @@ async def _submit(app_id: uuid.UUID) -> dict:
                             )
                         except Exception:  # noqa: BLE001
                             confirmed = False
+
+                        # OTP relay: the portal emailed a code. Ask the user for it
+                        # over Telegram and enter it here (browser still open), so
+                        # verified portals can actually finish.
+                        if needs_verification and settings.telegram_bot_token:
+                            from app.services.notify import (
+                                chat_id_for_user,
+                                send_telegram,
+                                wait_for_telegram_code,
+                            )
+
+                            chat_id = await chat_id_for_user(session, app.user_id)
+                            if chat_id:
+                                otp_asked = True
+                                ask_ts = int(time.time())
+                                mins = max(1, settings.submit_otp_wait_seconds // 60)
+                                await send_telegram(
+                                    chat_id,
+                                    f"🔐 {job.title}: reply here with the verification "
+                                    f"code emailed to you to finish submitting "
+                                    f"(within {mins} min).",
+                                )
+                                code = await wait_for_telegram_code(
+                                    chat_id, ask_ts, settings.submit_otp_wait_seconds
+                                )
+                                if code:
+                                    otp_code_received = True
+                                    if await applier.submit_verification_code(
+                                        page, code
+                                    ):
+                                        body = ((await page.content()) or "").lower()
+                                        confirmed = any(
+                                            m in body for m in _CONFIRM_MARKERS
+                                        )
+                                        needs_verification = (not confirmed) and any(
+                                            m in body for m in _VERIFY_MARKERS
+                                        )
                 except Exception as exc:  # noqa: BLE001
                     error = str(exc)[:300]
                     logger.exception("auto-submit navigation/submit failed")
@@ -226,16 +266,26 @@ async def _submit(app_id: uuid.UUID) -> dict:
         from app.services.notify import notify_user
 
         if confirmed:
+            via = (
+                " — verified with the code you sent."
+                if otp_code_received
+                else " — confirmation detected on the portal."
+            )
             msg = (
                 f"✅ Auto-submitted: {job.title}"
                 + (f" at {job.company}" if job.company else "")
-                + " — confirmation detected on the portal."
+                + via
             )
         elif needs_verification:
+            if otp_asked and not otp_code_received:
+                extra = " I asked for the code on Telegram but didn't get it in time."
+            elif otp_code_received:
+                extra = " The code didn't go through — please finish in your browser."
+            else:
+                extra = ""
             msg = (
-                f"📧 {job.title}: the portal sent a verification code to your email "
-                "to finish submitting — auto-submit can't enter it. Open the posting "
-                "and submit there yourself; everything's already filled in."
+                f"📧 {job.title}: needs an emailed verification code to submit.{extra} "
+                "Open the posting and submit there yourself; everything's filled in."
             )
         elif clicked:
             msg = (

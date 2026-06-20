@@ -87,6 +87,10 @@ class Settings(BaseSettings):
 
     # --- External services (later phases) ---
     telegram_bot_token: str | None = None
+    # Auto-submit OTP relay: when a portal emails a verification code, the submit
+    # task pauses on the code screen and asks the user for the code over Telegram,
+    # waiting up to this many seconds before giving up (-> Needs Fixes).
+    submit_otp_wait_seconds: int = 180
 
     @property
     def database_url(self) -> str:
