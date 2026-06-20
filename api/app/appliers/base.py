@@ -27,6 +27,9 @@ FIELD_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("nationality",), "nationality"),
     (("national id", "national-id", "id number"), "national_id"),
     (("notice period", "notice_period", "notice-period"), "notice_period"),
+    # After nationality/national-id so those win first; catches the standalone
+    # "Country" field many ATS forms require (often a react-select).
+    (("country",), "country"),
 ]
 
 # Substrings that mark a field we intentionally leave blank for the human.
@@ -55,6 +58,14 @@ def candidate_values(data: dict) -> dict[str, str]:
         parts = name.split()
         first = parts[0]
         last = " ".join(parts[1:]) if len(parts) > 1 else ""
+    # Country: use an explicit value if stored, else infer for Saudi nationals
+    # (this app is for the Saudi market / Saudi nationals) so the required
+    # "Country" field on ATS forms gets filled.
+    country = (data.get("country") or "").strip()
+    if not country and (data.get("nationality") or "").strip().lower().startswith(
+        "saudi"
+    ):
+        country = "Saudi Arabia"
     values = {
         "first_name": first,
         "last_name": last,
@@ -66,6 +77,7 @@ def candidate_values(data: dict) -> dict[str, str]:
         "nationality": data.get("nationality"),
         "national_id": data.get("national_id"),
         "notice_period": data.get("notice_period"),
+        "country": country,
     }
     return {k: str(v) for k, v in values.items() if v}
 
