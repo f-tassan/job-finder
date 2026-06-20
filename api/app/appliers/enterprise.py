@@ -78,6 +78,14 @@ class EnterpriseApplier(GenericApplier):
         'button:has-text("Sign In")',
         'button:has-text("Log In")',
     )
+    # Advance past a passwordless email gate (Oracle ORC "you don't need an
+    # account": enter email → Next). Used only when no password field is present.
+    email_continue_selectors: tuple[str, ...] = (
+        'button:has-text("Next")',
+        'a:has-text("Next")',
+        'button:has-text("Continue")',
+        'a:has-text("Continue")',
+    )
     # Save-a-draft buttons (NOT submit). Order: most explicit first.
     save_draft_selectors: tuple[str, ...] = (
         'button:has-text("Save and continue later")',
@@ -122,6 +130,24 @@ class EnterpriseApplier(GenericApplier):
             except Exception:  # noqa: BLE001
                 logger.debug("fill_first failed: %s", sel, exc_info=True)
         return False
+
+    async def _wait_ready(self, page: Any) -> None:
+        """Enterprise portals (Oracle ORC, SuccessFactors, Workday) are SPAs:
+        `domcontentloaded` fires on an empty shell and the real form/buttons paint
+        seconds later. Wait for the network to settle (and a moment more) so we
+        don't act on a loading spinner."""
+        try:
+            await page.wait_for_load_state("networkidle", timeout=25000)
+        except Exception:  # noqa: BLE001 - some SPAs poll forever; fall through
+            logger.debug("networkidle wait timed out", exc_info=True)
+        # As a stronger signal, wait briefly for any launch/sign-in control.
+        for sel in (self.launch_selectors + self.signin_link_selectors):
+            try:
+                await page.wait_for_selector(sel, timeout=4000, state="visible")
+                break
+            except Exception:  # noqa: BLE001
+                continue
+        await page.wait_for_timeout(1500)
 
     async def reveal(self, page: Any) -> None:
         """Walk the launch-button chain to expose the form. Buttons may appear in
@@ -202,23 +228,32 @@ class EnterpriseApplier(GenericApplier):
         return PrefillResult(filled=filled, missing=[]), done
 
     async def login(self, root: Any, page: Any, creds: dict[str, str]) -> bool:
-        """Sign in with the user's own stored account. Returns True if both
-        fields were filled and the sign-in button clicked. Never registers."""
+        """Sign in with the user's own stored account, or advance a passwordless
+        email gate. Returns True if it got past the auth step. Never registers."""
         user = (creds or {}).get("username")
         pw = (creds or {}).get("password")
-        if not user or not pw:
+        if not user:
             return False
         # Some screens default to "Create Account"; flip to the sign-in form.
         await self._click_first(page, self.signin_link_selectors, settle_ms=600)
         ok_user = await self._fill_first(root, self.username_selectors, user)
-        ok_pw = await self._fill_first(root, self.password_selectors, pw)
-        if not (ok_user and ok_pw):
+        if not ok_user:
             return False
-        clicked = await self._click_first(root, self.submit_login_selectors)
-        if not clicked:
-            clicked = await self._click_first(page, self.submit_login_selectors)
-        await page.wait_for_timeout(1500)
-        return bool(clicked)
+        ok_pw = await self._fill_first(root, self.password_selectors, pw) if pw else False
+        if ok_pw:
+            clicked = await self._click_first(root, self.submit_login_selectors)
+            if not clicked:
+                clicked = await self._click_first(page, self.submit_login_selectors)
+            await page.wait_for_timeout(1500)
+            return bool(clicked)
+        # No password field → passwordless email gate (Oracle ORC). Advance it.
+        advanced = await self._click_first(root, self.email_continue_selectors)
+        if not advanced:
+            advanced = await self._click_first(page, self.email_continue_selectors)
+        if advanced:
+            await page.wait_for_timeout(2500)
+            return True
+        return False
 
     async def save_draft(self, root: Any, page: Any) -> bool:
         """Click a Save-as-draft button (never Submit). Returns True if one was
@@ -240,6 +275,7 @@ class EnterpriseApplier(GenericApplier):
         save_draft: bool = False,
     ) -> PrefillResult:
         try:
+            await self._wait_ready(page)
             await self.reveal(page)
         except Exception:  # noqa: BLE001
             logger.debug("reveal failed", exc_info=True)
@@ -252,6 +288,13 @@ class EnterpriseApplier(GenericApplier):
                 logged_in = await self.login(root, page, credentials)
             except Exception:  # noqa: BLE001
                 logger.debug("login failed", exc_info=True)
+            if logged_in:
+                # The post-login application form is also SPA-rendered; let it paint.
+                try:
+                    await page.wait_for_load_state("networkidle", timeout=15000)
+                except Exception:  # noqa: BLE001
+                    pass
+                await page.wait_for_timeout(1800)
             # Login usually navigates to the form; re-resolve the root.
             root = await self.form_root(page)
 
