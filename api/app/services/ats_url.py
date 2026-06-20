@@ -10,7 +10,8 @@ from urllib.parse import urlparse
 
 
 def tenant_key(url: str | None) -> str:
-    """The per-tenant storage key for a job URL: its lowercased host, no port."""
+    """The per-tenant storage key for a job URL: its lowercased host, no port and
+    no leading `www.` (so a login saved for `neom.com` matches `www.neom.com`)."""
     if not url:
         return ""
     parsed = urlparse(url)
@@ -18,4 +19,5 @@ def tenant_key(url: str | None) -> str:
     if not netloc:
         # No scheme (bare host or host/path); reparse with one.
         netloc = urlparse("//" + url).netloc.lower()
-    return netloc.split("@")[-1].split(":")[0]
+    host = netloc.split("@")[-1].split(":")[0]
+    return host[4:] if host.startswith("www.") else host

@@ -196,6 +196,8 @@ def test_successfactors_resolves_iframe_and_fills():
         ("https://acme.wd1.myworkdayjobs.com/en-US/careers/job/9", "acme.wd1.myworkdayjobs.com"),
         ("https://X.Taleo.net:443/careersection/apply", "x.taleo.net"),
         ("acme.wd1.myworkdayjobs.com/job/1", "acme.wd1.myworkdayjobs.com"),
+        ("https://www.neom.com/en-us/careers", "neom.com"),
+        ("https://www.maaden.com.sa/en/careers", "maaden.com.sa"),
         ("", ""),
         (None, ""),
     ],
