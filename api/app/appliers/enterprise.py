@@ -36,12 +36,16 @@ SelectorMap = list[tuple[str, tuple[str, ...]]]
 def merge_results(*results: PrefillResult) -> PrefillResult:
     filled: dict[str, str] = {}
     missing: list[str] = []
+    ai_suggested: list[str] = []
     for r in results:
         filled.update(r.get("filled", {}))
         for m in r.get("missing", []):
             if m not in missing:
                 missing.append(m)
-    return PrefillResult(filled=filled, missing=missing)
+        for a in r.get("ai_suggested", []):
+            if a not in ai_suggested:
+                ai_suggested.append(a)
+    return PrefillResult(filled=filled, missing=missing, ai_suggested=ai_suggested)
 
 
 class EnterpriseApplier(GenericApplier):
@@ -274,6 +278,7 @@ class EnterpriseApplier(GenericApplier):
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
         profile: dict | None = None,
+        overrides: dict[str, str] | None = None,
     ) -> PrefillResult:
         try:
             await self._wait_ready(page)
@@ -303,7 +308,7 @@ class EnterpriseApplier(GenericApplier):
 
         known, done = await self.fill_known(root, values)
         sweep = await self._sweep(
-            root, values, already_filled=done, profile=profile
+            root, values, already_filled=done, profile=profile, overrides=overrides
         )
         result = merge_results(known, sweep)
 

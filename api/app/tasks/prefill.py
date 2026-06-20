@@ -126,6 +126,7 @@ async def _prefill(app_id: uuid.UUID) -> dict:
         needs_credentials = bool(result.get("needs_credentials"))
         app.prefilled_answers = result.get("filled", {})
         app.missing_fields = result.get("missing", [])
+        app.ai_suggested_fields = result.get("ai_suggested", [])
         app.needs_credentials = needs_credentials
         if app.status in (ApplicationStatus.discovered, ApplicationStatus.drafting):
             app.status = ApplicationStatus.ready_to_submit

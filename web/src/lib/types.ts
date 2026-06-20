@@ -71,6 +71,7 @@ export interface ApplicationDetail extends Application {
   has_tailored_cv: boolean;
   prefilled_answers: Record<string, string>;
   missing_fields: string[];
+  ai_suggested_fields: string[];
   has_screenshot: boolean;
   events: ApplicationEvent[];
 }

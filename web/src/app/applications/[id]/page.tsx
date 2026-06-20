@@ -101,6 +101,20 @@ export default function ApplicationDetailPage() {
     },
   });
 
+  // Standalone ATS only: fills, attaches the CV, clicks Submit, and confirms on
+  // the browser worker. Disabled for LinkedIn/Bayt (you submit there yourself).
+  const autoSubmit = useMutation({
+    mutationFn: () => apiSend(`/applications/${id}/auto-submit`, "POST"),
+    onSuccess: () => {
+      qc.invalidateQueries({ queryKey: ["application", id] });
+      setMsg(
+        "Finalizing on the browser worker — it re-fills (using your saved answers), attaches your CV, clicks Submit, and looks for a confirmation. Refresh in ~30s; you'll get a Telegram notification with the result.",
+      );
+      setTimeout(() => setMsg(null), 14000);
+    },
+    onError: (e) => setMsg(e instanceof Error ? e.message : "Failed"),
+  });
+
   async function downloadCv() {
     const res = await fetch(`${API_BASE}/applications/${id}/cv`, {
       headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
@@ -125,6 +139,13 @@ export default function ApplicationDetailPage() {
       </AppShell>
     );
   }
+
+  // Auto-submit is allowed only for standalone ATS forms — never LinkedIn/Bayt.
+  const jobUrl = (data.job.url || "").toLowerCase();
+  const autoSubmitBlocked =
+    !data.job.url ||
+    jobUrl.includes("linkedin.com") ||
+    jobUrl.includes("bayt.com");
 
   return (
     <AppShell>
@@ -197,10 +218,28 @@ export default function ApplicationDetailPage() {
         >
           {prefill.isPending ? "Queuing…" : "Pre-fill form"}
         </button>
+        {data.status !== "submitted" && !autoSubmitBlocked && (
+          <button
+            onClick={() => {
+              if (
+                confirm(
+                  `This will open ${data.job.company || "the company"}'s form on the browser worker, re-fill it from your saved answers, attach your CV, click Submit, and try to confirm. Make sure you've completed the required fields below first. Continue?`,
+                )
+              )
+                autoSubmit.mutate();
+            }}
+            disabled={autoSubmit.isPending}
+            className="rounded-lg bg-rose-700 px-4 py-2 text-sm font-medium text-white hover:bg-rose-600 disabled:opacity-50"
+            title="Standalone ATS only — fills, attaches CV, and submits on the company site"
+          >
+            {autoSubmit.isPending ? "Finalizing…" : "Auto-submit (finalize)"}
+          </button>
+        )}
         {data.status !== "submitted" && (
           <button
             onClick={() => submit.mutate()}
             className="rounded-lg bg-green-700 px-4 py-2 text-sm font-medium text-white hover:bg-green-600"
+            title="Record that you submitted it yourself (LinkedIn/Bayt: you submit there)"
           >
             Mark submitted
           </button>
@@ -229,19 +268,43 @@ export default function ApplicationDetailPage() {
               <h3 className="mb-2 text-xs font-medium text-slate-300">
                 Pre-filled answers
               </h3>
+              {(data.ai_suggested_fields?.length ?? 0) > 0 && (
+                <p className="mb-2 text-xs text-amber-300/90">
+                  ⚠ Fields tagged{" "}
+                  <span className="rounded bg-amber-500/20 px-1 font-medium text-amber-300">
+                    Check
+                  </span>{" "}
+                  were guessed from your answer bank — verify them before
+                  submitting.
+                </p>
+              )}
               <div className="space-y-2">
-                {Object.entries(answers).map(([k, v]) => (
-                  <div key={k}>
-                    <label className="block text-xs text-slate-400">{k}</label>
-                    <input
-                      value={v}
-                      onChange={(e) =>
-                        setAnswers((a) => ({ ...a, [k]: e.target.value }))
-                      }
-                      className="w-full rounded-lg border border-slate-700 px-3 py-1.5 text-sm"
-                    />
-                  </div>
-                ))}
+                {Object.entries(answers).map(([k, v]) => {
+                  const needsCheck = data.ai_suggested_fields?.includes(k);
+                  return (
+                    <div key={k}>
+                      <label className="mb-0.5 flex items-center gap-2 text-xs text-slate-400">
+                        <span>{k}</span>
+                        {needsCheck && (
+                          <span className="rounded bg-amber-500/20 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-amber-300">
+                            Check
+                          </span>
+                        )}
+                      </label>
+                      <input
+                        value={v}
+                        onChange={(e) =>
+                          setAnswers((a) => ({ ...a, [k]: e.target.value }))
+                        }
+                        className={`w-full rounded-lg border px-3 py-1.5 text-sm ${
+                          needsCheck
+                            ? "border-amber-600/60 bg-amber-950/20"
+                            : "border-slate-700"
+                        }`}
+                      />
+                    </div>
+                  );
+                })}
                 {Object.keys(answers).length > 0 && (
                   <button
                     onClick={() => saveAnswers.mutate()}
@@ -271,15 +334,28 @@ export default function ApplicationDetailPage() {
 
         {shotUrl && (
           <div className="mt-4">
-            <h3 className="mb-2 text-xs font-medium text-slate-300">
-              Form screenshot
-            </h3>
-            {/* eslint-disable-next-line @next/next/no-img-element */}
-            <img
-              src={shotUrl}
-              alt="Application form screenshot"
-              className="max-h-[480px] w-auto rounded-lg border border-slate-800"
-            />
+            <div className="mb-2 flex items-center gap-3">
+              <h3 className="text-xs font-medium text-slate-300">
+                Form screenshot
+              </h3>
+              <a
+                href={shotUrl}
+                target="_blank"
+                rel="noreferrer"
+                className="text-xs text-indigo-400 hover:underline"
+              >
+                Open full size in new tab ↗
+              </a>
+            </div>
+            {/* Click the image to open the full-resolution screenshot to zoom. */}
+            <a href={shotUrl} target="_blank" rel="noreferrer" title="Open full size">
+              {/* eslint-disable-next-line @next/next/no-img-element */}
+              <img
+                src={shotUrl}
+                alt="Application form screenshot"
+                className="max-h-[480px] w-auto cursor-zoom-in rounded-lg border border-slate-800 hover:border-indigo-500"
+              />
+            </a>
           </div>
         )}
       </div>

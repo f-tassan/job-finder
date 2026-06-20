@@ -26,9 +26,13 @@ FIELD_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("city", "location", "where are you", "current location"), "city"),
     (("nationality",), "nationality"),
     (("national id", "national-id", "id number"), "national_id"),
+    (("notice period", "notice_period", "notice-period"), "notice_period"),
 ]
 
 # Substrings that mark a field we intentionally leave blank for the human.
+# Strictly the sensitive/free-text fields the user must own: pay and open-ended
+# "why us"/motivation. Known factual fields (e.g. notice period) are filled from
+# the answer bank instead — see FIELD_PATTERNS / candidate_values.
 SENSITIVE = (
     "salary",
     "compensation",
@@ -40,7 +44,6 @@ SENSITIVE = (
     "motivation",
     "sponsor",
     "visa",
-    "notice period",
 )
 
 
@@ -62,6 +65,7 @@ def candidate_values(data: dict) -> dict[str, str]:
         "city": data.get("city"),
         "nationality": data.get("nationality"),
         "national_id": data.get("national_id"),
+        "notice_period": data.get("notice_period"),
     }
     return {k: str(v) for k, v in values.items() if v}
 
@@ -95,6 +99,7 @@ class Applier(ABC):
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
         profile: dict | None = None,
+        overrides: dict[str, str] | None = None,
     ) -> PrefillResult:
         """Fill the form. If `credentials` (the user's own portal login) are
         given and `save_draft` is set, an enterprise applier may sign in and save
@@ -102,7 +107,12 @@ class Applier(ABC):
 
         `profile` is the full answer bank; appliers that support it use an LLM to
         answer unknown required fields strictly from it (never inventing), leaving
-        sensitive/ungrounded fields blank for the human."""
+        sensitive/ungrounded fields blank for the human.
+
+        `overrides` maps a field's display label to a value the human entered at
+        review (e.g. salary, "why this company"). It takes precedence over every
+        heuristic and is the only way the sensitive fields get filled — used by
+        the explicit auto-submit so review-then-one-click actually completes."""
         raise NotImplementedError
 
 

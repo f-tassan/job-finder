@@ -124,6 +124,7 @@ class ApplicationDetailOut(ApplicationOut):
     has_tailored_cv: bool = False
     prefilled_answers: dict[str, Any] = {}
     missing_fields: list[Any] = []
+    ai_suggested_fields: list[Any] = []
     has_screenshot: bool = False
     events: list[ApplicationEventOut] = []
 

@@ -21,9 +21,16 @@ logger = logging.getLogger(__name__)
 
 _FILLABLE_TYPES = {"text", "email", "tel", "url", "search", ""}
 
-# Marker appended to answers the LLM derived from the answer bank, so the human
-# reviewer knows to verify them before submitting (CLAUDE.md review-queue rule).
+# Legacy marker that older pre-fills appended to LLM-derived values. We no longer
+# write it (AI-suggested fields are tracked in a separate list), but we still
+# strip it from any stored value so it can never be typed into a form.
 _AI_NOTE = " — AI-suggested, verify"
+
+
+def _strip_ai_note(v: str) -> str:
+    """Drop a legacy trailing AI-suggested marker so an old stored value isn't
+    typed verbatim into the form."""
+    return v[: -len(_AI_NOTE)] if v.endswith(_AI_NOTE) else v
 
 
 async def _select_closest(el: Any, value: str) -> str | None:
@@ -77,7 +84,20 @@ _SUBMIT_SELECTORS = (
 )
 
 
-async def _label_blob(root: Any, el: Any) -> str:
+def _clean_label(*candidates: str) -> str:
+    """A human-readable field name for display: the first non-empty candidate
+    (label text > aria-label > placeholder > name), whitespace-collapsed, with the
+    required-marker '*' dropped. Falls back to a prettified field name."""
+    for cand in candidates:
+        c = " ".join((cand or "").replace("*", " ").split()).strip(" :")
+        if c:
+            return c[:80]
+    return "field"
+
+
+async def _label_blob(root: Any, el: Any) -> tuple[str, str]:
+    """Return (blob, label): `blob` is the raw concatenation used for matching;
+    `label` is a clean display name shown to the user / used as a result key."""
     name = (await el.get_attribute("name")) or ""
     el_id = (await el.get_attribute("id")) or ""
     placeholder = (await el.get_attribute("placeholder")) or ""
@@ -91,7 +111,84 @@ async def _label_blob(root: Any, el: Any) -> str:
                 label_text = (await lbl.inner_text()) or ""
         except Exception:  # noqa: BLE001
             pass
-    return " ".join([name, el_id, placeholder, aria, auto, label_text]).strip()
+    blob = " ".join([name, el_id, placeholder, aria, auto, label_text]).strip()
+    label = _clean_label(label_text, aria, placeholder, name.replace("_", " "))
+    return blob, label
+
+
+async def _react_combo_meta(root: Any, combo: Any) -> tuple[str, str]:
+    """(blob, label) for a react-select combobox input. react-select gives its
+    inner input an id like `react-select-<base>-input`; the visible <label> is
+    `label[for="<base>"]` (Greenhouse sets <base> to the question id)."""
+    cid = (await combo.get_attribute("id")) or ""
+    base = cid
+    if base.startswith("react-select-"):
+        base = base[len("react-select-") :]
+    if base.endswith("-input"):
+        base = base[: -len("-input")]
+    label_text = ""
+    for sel in (f'label[for="{base}"]', f"#{base}-label"):
+        if not base:
+            break
+        try:
+            le = await root.query_selector(sel)
+            if le:
+                label_text = (await le.inner_text()) or ""
+                break
+        except Exception:  # noqa: BLE001
+            pass
+    aria = (await combo.get_attribute("aria-label")) or ""
+    blob = " ".join([base, aria, label_text]).strip()
+    label = _clean_label(label_text, aria, base.replace("_", " "))
+    return blob, label
+
+
+async def _fill_react_select(root: Any, combo: Any, value: str) -> str | None:
+    """Drive a react-select combobox like a human: open it, type to filter, and
+    click the best-matching option (so its hidden required input is committed —
+    just setting a value the way native <select> filling does won't stick).
+
+    Returns the chosen option text, or None if nothing matched (menu left closed).
+    """
+    try:
+        await combo.click()
+        try:
+            await combo.fill(value)
+        except Exception:  # noqa: BLE001 - some inputs need keystrokes
+            await combo.press_sequentially(value, delay=15)
+        await root.wait_for_timeout(400)
+        pairs: list[tuple[str, Any]] = []
+        for o in await root.query_selector_all('[role="option"]'):
+            try:
+                t = ((await o.inner_text()) or "").strip()
+                if t:
+                    pairs.append((t, o))
+            except Exception:  # noqa: BLE001
+                continue
+        if not pairs:
+            await combo.press("Escape")
+            return None
+        low = value.strip().lower()
+        chosen = next((o for t, o in pairs if t.lower() == low), None) or next(
+            (o for t, o in pairs if low and low in t.lower()), None
+        )
+        chosen_text: str | None = None
+        if chosen is None:
+            match = difflib.get_close_matches(value, [t for t, _ in pairs], n=1, cutoff=0.6)
+            if match:
+                chosen = next(o for t, o in pairs if t == match[0])
+                chosen_text = match[0]
+        else:
+            chosen_text = next(t for t, o in pairs if o is chosen)
+        if chosen is None:
+            await combo.press("Escape")
+            return None
+        await chosen.click()
+        await root.wait_for_timeout(150)
+        return chosen_text
+    except Exception:  # noqa: BLE001
+        logger.debug("react-select fill skipped", exc_info=True)
+        return None
 
 
 class GenericApplier(Applier):
@@ -103,6 +200,7 @@ class GenericApplier(Applier):
         values: dict[str, str],
         already_filled: set[str] | None = None,
         profile: dict | None = None,
+        overrides: dict[str, str] | None = None,
     ) -> PrefillResult:
         """Fill mappable text fields and dropdowns under `root` (a Page or Frame).
 
@@ -114,12 +212,21 @@ class GenericApplier(Applier):
         unknown required text fields and unmatched dropdowns are answered strictly
         from it — empty when not grounded — and flagged AI-suggested for the human
         to verify (CLAUDE.md: never invent; sensitive fields stay blank).
+
+        `overrides` maps a field's display label to a human-entered value; it wins
+        over every heuristic (including the sensitive-blank rule) so values the
+        user completed at review — salary, "why this company" — actually land.
         """
         already_filled = already_filled or set()
+        overrides = overrides or {}
         filled: dict[str, str] = {}
         missing: list[str] = []
+        # Labels the LLM derived from the answer bank: values are stored clean in
+        # `filled`; this list flags them "verify" for the human (never submitted
+        # with any marker baked into the value).
+        ai_suggested: list[str] = []
         # Unknown required fields the heuristics couldn't map, deferred to the LLM.
-        # Each entry: {"id", "label", "options"?, "_el"}.
+        # Each entry: {"id", "label", "options"?, "_el"|"_combo"}.
         unanswered: list[dict[str, Any]] = []
         try:
             elements = await root.query_selector_all(
@@ -137,13 +244,29 @@ class GenericApplier(Applier):
                 tag = (await el.evaluate("e => e.tagName")).lower()
                 if tag != "textarea" and typ not in _FILLABLE_TYPES:
                     continue
-                blob = await _label_blob(root, el)
-                label = blob[:80] or (await el.get_attribute("name")) or "field"
+                # Skip react-select's internal inputs (the search box + the
+                # hidden required mirror) — comboboxes are handled separately, and
+                # typing into the filter box doesn't actually pick an option.
+                el_id = (await el.get_attribute("id")) or ""
+                if (
+                    el_id.startswith("react-select-")
+                    or (await el.get_attribute("role")) == "combobox"
+                    or (await el.get_attribute("aria-hidden")) == "true"
+                ):
+                    continue
+                blob, label = await _label_blob(root, el)
                 required = (
                     (await el.get_attribute("required")) is not None
                     or (await el.get_attribute("aria-required")) == "true"
                     or "*" in blob
                 )
+
+                # Human-entered review value wins over everything (even sensitive).
+                ov = _strip_ai_note(overrides.get(label, "")).strip()
+                if ov:
+                    await el.fill(ov)
+                    filled[label] = ov
+                    continue
 
                 if is_sensitive(blob):
                     missing.append(f"{label} (left blank — sensitive)")
@@ -177,13 +300,20 @@ class GenericApplier(Applier):
             try:
                 if not await el.is_visible():
                     continue
-                blob = await _label_blob(root, el)
-                label = blob[:80] or (await el.get_attribute("name")) or "field"
+                blob, label = await _label_blob(root, el)
                 required = (
                     (await el.get_attribute("required")) is not None
                     or (await el.get_attribute("aria-required")) == "true"
                     or "*" in blob
                 )
+                ov = _strip_ai_note(overrides.get(label, "")).strip()
+                if ov:
+                    chosen = await _select_closest(el, ov)
+                    if chosen is not None:
+                        filled[label] = chosen
+                    else:
+                        missing.append(label)
+                    continue
                 if is_sensitive(blob):
                     missing.append(f"{label} (left blank — sensitive)")
                     continue
@@ -212,23 +342,76 @@ class GenericApplier(Applier):
             except Exception:  # noqa: BLE001
                 logger.debug("select prefill skipped", exc_info=True)
 
+        # --- react-select comboboxes (modern Greenhouse has no native <select>) -
+        try:
+            combos = await root.query_selector_all(
+                'input[role="combobox"], input[id^="react-select-"]'
+            )
+        except Exception:  # noqa: BLE001
+            combos = []
+        for combo in combos:
+            try:
+                if not await combo.is_visible():
+                    continue
+                blob, label = await _react_combo_meta(root, combo)
+                required = (
+                    "*" in blob
+                    or (await combo.get_attribute("aria-required")) == "true"
+                    or (await combo.get_attribute("required")) is not None
+                )
+                ov = _strip_ai_note(overrides.get(label, "")).strip()
+                if ov:
+                    chosen = await _fill_react_select(root, combo, ov)
+                    if chosen is not None:
+                        filled[label] = chosen
+                    else:
+                        missing.append(label)
+                    continue
+                if is_sensitive(blob):
+                    missing.append(f"{label} (left blank — sensitive)")
+                    continue
+                key = match_field(blob)
+                if key in already_filled:
+                    continue
+                if key and values.get(key):
+                    chosen = await _fill_react_select(root, combo, values[key])
+                    if chosen is not None:
+                        filled[label] = chosen
+                    elif required:
+                        missing.append(label)
+                elif required:
+                    if profile:
+                        unanswered.append({"label": label, "_combo": combo})
+                    else:
+                        missing.append(label)
+            except Exception:  # noqa: BLE001
+                logger.debug("combobox prefill skipped", exc_info=True)
+
         # --- LLM fallback for the unknown required fields --------------------
         if profile and unanswered:
-            await self._llm_fill(profile, unanswered, filled, missing)
+            await self._llm_fill(
+                root, profile, unanswered, filled, missing, ai_suggested
+            )
 
-        return PrefillResult(filled=filled, missing=missing)
+        return PrefillResult(
+            filled=filled, missing=missing, ai_suggested=ai_suggested
+        )
 
     async def _llm_fill(
         self,
+        root: Any,
         profile: dict,
         unanswered: list[dict[str, Any]],
         filled: dict[str, str],
         missing: list[str],
+        ai_suggested: list[str],
     ) -> None:
         """Answer unknown required fields from the answer bank via the LLM.
 
-        Grounded answers are typed/selected and recorded as AI-suggested; fields
-        the LLM can't ground (empty answer) stay in `missing` for the human.
+        Grounded answers are typed/selected (text inputs, native <select>, and
+        react-select comboboxes), stored clean in `filled`, and their labels added
+        to `ai_suggested` so the UI flags them "verify"; fields the LLM can't
+        ground (empty answer) stay in `missing` for the human.
         """
         from app.services import llm
 
@@ -246,21 +429,27 @@ class GenericApplier(Applier):
             answers = {}
         for i, f in enumerate(unanswered):
             ans = answers.get(str(i), "").strip()
-            el = f["_el"]
             label = f["label"]
             if not ans:
                 missing.append(label)
                 continue
             try:
-                if f.get("options"):
-                    chosen = await _select_closest(el, ans)
+                if f.get("_combo") is not None:
+                    chosen = await _fill_react_select(root, f["_combo"], ans)
                     if chosen is None:
                         missing.append(label)
                         continue
-                    filled[label] = chosen + _AI_NOTE
+                    filled[label] = chosen
+                elif f.get("options"):
+                    chosen = await _select_closest(f["_el"], ans)
+                    if chosen is None:
+                        missing.append(label)
+                        continue
+                    filled[label] = chosen
                 else:
-                    await el.fill(ans)
-                    filled[label] = ans + _AI_NOTE
+                    await f["_el"].fill(ans)
+                    filled[label] = ans
+                ai_suggested.append(label)
             except Exception:  # noqa: BLE001
                 logger.debug("llm field fill skipped", exc_info=True)
                 missing.append(label)
@@ -273,9 +462,10 @@ class GenericApplier(Applier):
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
         profile: dict | None = None,
+        overrides: dict[str, str] | None = None,
     ) -> PrefillResult:
         # Static forms have no account/draft concept; credentials are ignored.
-        return await self._sweep(page, values, profile=profile)
+        return await self._sweep(page, values, profile=profile, overrides=overrides)
 
     async def attach_cv(self, page: Any, cv_path: str) -> bool:
         """Attach the CV to the form's résumé file input. File inputs are usually

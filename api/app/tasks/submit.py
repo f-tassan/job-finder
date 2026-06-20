@@ -122,6 +122,10 @@ async def _submit(app_id: uuid.UUID) -> dict:
                         values,
                         credentials=credentials,
                         save_draft=False,
+                        # Re-apply what the human reviewed/completed (salary,
+                        # "why this company", verified answers) so the one-click
+                        # finalize submits a complete form, not a blank one.
+                        overrides=app.prefilled_answers or {},
                     )
                     if prefill.get("needs_credentials"):
                         error = "portal requires a login that isn't stored"
@@ -150,6 +154,9 @@ async def _submit(app_id: uuid.UUID) -> dict:
 
         app.prefilled_answers = prefill.get("filled", {}) or app.prefilled_answers
         app.missing_fields = prefill.get("missing", []) or app.missing_fields
+        app.ai_suggested_fields = (
+            prefill.get("ai_suggested", []) or app.ai_suggested_fields
+        )
         app.needs_credentials = bool(prefill.get("needs_credentials"))
         if confirmed:
             from datetime import datetime, timezone

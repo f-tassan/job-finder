@@ -54,6 +54,11 @@ class Application(Base):
     cover_letter: Mapped[str | None] = mapped_column(Text)
     prefilled_answers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     missing_fields: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Labels of pre-filled answers the LLM derived from the answer bank; their
+    # values live clean in prefilled_answers and this list flags them "verify".
+    ai_suggested_fields: Mapped[list] = mapped_column(
+        JSONB, nullable=False, default=list
+    )
     # Set by prefill when the portal required a login but no credential was stored
     # (or login failed): the user must add a login in Settings, then Retry.
     needs_credentials: Mapped[bool] = mapped_column(
