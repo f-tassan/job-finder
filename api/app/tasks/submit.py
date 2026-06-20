@@ -51,6 +51,22 @@ _CONFIRM_MARKERS = (
     "thank you for your interest",
 )
 
+# Text that signals the portal demands an emailed verification/OTP code before it
+# will accept the application (e.g. Greenhouse "verified applications"). The
+# throwaway headless browser can't read the user's inbox, so we can't pass this —
+# we stop, leave the app unsent, and tell the human to finish it themselves.
+_VERIFY_MARKERS = (
+    "verification code",
+    "verify your email",
+    "confirm you're a human",
+    "confirm you are a human",
+    "code was sent",
+    "sent a code",
+    "enter the code",
+    "enter the 6",
+    "check your email",
+)
+
 
 async def _submit(app_id: uuid.UUID) -> dict:
     async with SessionLocal() as session:
@@ -98,6 +114,7 @@ async def _submit(app_id: uuid.UUID) -> dict:
         cv_attached = False
         clicked = False
         confirmed = False
+        needs_verification = False
         error: str | None = None
 
         from playwright.async_api import async_playwright
@@ -135,9 +152,14 @@ async def _submit(app_id: uuid.UUID) -> dict:
                         clicked = await applier.submit(page)
                         await page.wait_for_timeout(1500)
                         try:
-                            body = (await page.content()) or ""
+                            body = ((await page.content()) or "").lower()
                             confirmed = clicked and any(
-                                m in body.lower() for m in _CONFIRM_MARKERS
+                                m in body for m in _CONFIRM_MARKERS
+                            )
+                            needs_verification = (
+                                clicked
+                                and not confirmed
+                                and any(m in body for m in _VERIFY_MARKERS)
                             )
                         except Exception:  # noqa: BLE001
                             confirmed = False
@@ -158,21 +180,41 @@ async def _submit(app_id: uuid.UUID) -> dict:
             prefill.get("ai_suggested", []) or app.ai_suggested_fields
         )
         app.needs_credentials = bool(prefill.get("needs_credentials"))
+
+        verify_note = (
+            "⚠ This portal emailed you a verification code to finish submitting — "
+            "auto-submit can't receive it. Open the posting and submit there "
+            "yourself (your answers are filled and the CV is attached)."
+        )
         if confirmed:
             from datetime import datetime, timezone
 
             app.status = ApplicationStatus.submitted
             if app.submitted_at is None:
                 app.submitted_at = datetime.now(timezone.utc)
+        elif needs_verification:
+            # Can't pass an emailed OTP from a throwaway browser — route it to the
+            # human with a clear explanation instead of silently failing.
+            app.status = ApplicationStatus.needs_attention
+            app.missing_fields = [verify_note] + [
+                m for m in (app.missing_fields or []) if m != verify_note
+            ]
         session.add(
             ApplicationEvent(
                 application_id=app.id,
-                type="submitted_auto" if confirmed else "submit_attempt",
+                type=(
+                    "submitted_auto"
+                    if confirmed
+                    else "submit_needs_verification"
+                    if needs_verification
+                    else "submit_attempt"
+                ),
                 payload={
                     "applier": applier.name,
                     "cv_attached": cv_attached,
                     "clicked_submit": clicked,
                     "confirmed": confirmed,
+                    "needs_verification": needs_verification,
                     "filled": len(prefill.get("filled", {})),
                     "missing": len(prefill.get("missing", [])),
                     "error": error,
@@ -189,6 +231,12 @@ async def _submit(app_id: uuid.UUID) -> dict:
                 + (f" at {job.company}" if job.company else "")
                 + " — confirmation detected on the portal."
             )
+        elif needs_verification:
+            msg = (
+                f"📧 {job.title}: the portal sent a verification code to your email "
+                "to finish submitting — auto-submit can't enter it. Open the posting "
+                "and submit there yourself; everything's already filled in."
+            )
         elif clicked:
             msg = (
                 f"⚠️ Tried to submit {job.title} but couldn't confirm it went "
@@ -203,6 +251,7 @@ async def _submit(app_id: uuid.UUID) -> dict:
         "application_id": str(app_id),
         "clicked_submit": clicked,
         "confirmed": confirmed,
+        "needs_verification": needs_verification,
         "error": error,
     }
 
