@@ -107,6 +107,16 @@ export interface JobMatch {
   tracked: boolean;
 }
 
+export interface PortalCredential {
+  id: string;
+  host: string;
+  username: string;
+  label: string | null;
+  created_at: string;
+  updated_at: string;
+  has_secret: boolean;
+}
+
 export const PLATFORMS = [
   "greenhouse",
   "lever",
