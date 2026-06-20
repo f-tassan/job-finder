@@ -78,6 +78,13 @@ class Settings(BaseSettings):
     openai_tailor_model: str = "gpt-4o"
     openai_parse_model: str = "gpt-4o-mini"
 
+    # --- Agent applier (browser-use LLM-driven form fill, opt-in fallback) ---
+    # When true, the prefill task uses an LLM browser agent to fill forms the
+    # deterministic appliers leave mostly empty. Never submits. Costs many LLM
+    # calls per form, so it's off by default and used only as a fallback.
+    agent_applier_enabled: bool = False
+    agent_applier_model: str = "gpt-4.1"
+
     # --- External services (later phases) ---
     telegram_bot_token: str | None = None
 

@@ -14,9 +14,13 @@ WORKDIR /app
 COPY . .
 # The base image ships browsers under /ms-playwright but not the playwright pip
 # package in the system python — install it (matching the base browser version).
+# browser-use (LLM browser-agent applier, opt-in fallback) is installed only in
+# this image — it's heavy and drives Chromium over CDP, so it stays out of the
+# shared api/worker images. It uses cdp-use, not the pinned playwright above.
 RUN pip install --upgrade pip \
     && pip install "playwright==1.48.0" \
     && pip install . \
+    && pip install "browser-use==0.13.1" \
     && chmod +x entrypoint.sh
 
 ENTRYPOINT ["./entrypoint.sh"]

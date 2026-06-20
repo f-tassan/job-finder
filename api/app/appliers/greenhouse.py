@@ -17,6 +17,7 @@ class GreenhouseApplier(GenericApplier):
         *,
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
+        profile: dict | None = None,
     ) -> PrefillResult:
         # Some boards hide the form behind an "Apply" button; reveal it if present.
         for sel in (
@@ -32,4 +33,4 @@ class GreenhouseApplier(GenericApplier):
                     break
             except Exception:  # noqa: BLE001
                 pass
-        return await super().prefill(page, values)
+        return await super().prefill(page, values, profile=profile)

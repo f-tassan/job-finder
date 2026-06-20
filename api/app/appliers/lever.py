@@ -17,6 +17,7 @@ class LeverApplier(GenericApplier):
         *,
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
+        profile: dict | None = None,
     ) -> PrefillResult:
         # Lever postings link to a dedicated /apply page with the form.
         try:
@@ -30,4 +31,4 @@ class LeverApplier(GenericApplier):
                 await page.wait_for_timeout(500)
         except Exception:  # noqa: BLE001
             pass
-        return await super().prefill(page, values)
+        return await super().prefill(page, values, profile=profile)

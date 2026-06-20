@@ -273,6 +273,7 @@ class EnterpriseApplier(GenericApplier):
         *,
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
+        profile: dict | None = None,
     ) -> PrefillResult:
         try:
             await self._wait_ready(page)
@@ -301,7 +302,9 @@ class EnterpriseApplier(GenericApplier):
         wall = await self.auth_wall(page, root)
 
         known, done = await self.fill_known(root, values)
-        sweep = await self._sweep(root, values, already_filled=done)
+        sweep = await self._sweep(
+            root, values, already_filled=done, profile=profile
+        )
         result = merge_results(known, sweep)
 
         draft_saved = False

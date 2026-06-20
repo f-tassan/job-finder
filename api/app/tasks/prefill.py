@@ -22,6 +22,7 @@ from app.models import (
     Application,
     ApplicationEvent,
     ApplicationStatus,
+    CvVersion,
     Job,
 )
 from app.tasks.celery_app import celery_app
@@ -80,6 +81,7 @@ async def _prefill(app_id: uuid.UUID) -> dict:
                         values,
                         credentials=credentials,
                         save_draft=bool(credentials),
+                        profile=data,
                     )
                 except Exception as exc:  # noqa: BLE001
                     error = str(exc)[:300]
@@ -91,6 +93,34 @@ async def _prefill(app_id: uuid.UUID) -> dict:
                     logger.exception("screenshot failed")
             finally:
                 await browser.close()
+
+        # Opt-in fallback: when the deterministic applier filled little and the
+        # agent applier is enabled, let the LLM browser agent try. It owns its own
+        # browser session and never submits.
+        if settings.agent_applier_enabled and len(result.get("filled", {})) < 3:
+            cv = (
+                await session.execute(
+                    select(CvVersion)
+                    .where(CvVersion.user_id == app.user_id)
+                    .order_by(
+                        CvVersion.is_default.desc(), CvVersion.created_at.desc()
+                    )
+                )
+            ).scalars().first()
+            from app.appliers.agent import run_agent_prefill
+
+            agent_res = await run_agent_prefill(
+                job_url=job.url,
+                candidate=values,
+                cv_path=cv.file_path if cv else None,
+                shot_path=shot_path,
+            )
+            if not agent_res.get("error"):
+                result["agent_summary"] = agent_res.get("summary")
+                if agent_res.get("screenshot_path"):
+                    app.screenshot_path = agent_res["screenshot_path"]
+            else:
+                logger.info("agent applier fallback skipped: %s", agent_res["error"])
 
         draft_saved = bool(result.get("draft_saved"))
         needs_credentials = bool(result.get("needs_credentials"))

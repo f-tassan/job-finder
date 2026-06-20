@@ -227,6 +227,81 @@ async def rank_jobs(profile_text: str, jobs: list[dict]) -> dict[str, float] | N
     return out or None
 
 
+_FIELD_ANSWER_SCHEMA: dict = {
+    "type": "object",
+    "additionalProperties": False,
+    "properties": {
+        "answers": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "additionalProperties": False,
+                "properties": {
+                    "id": {"type": "string"},
+                    "answer": {"type": "string"},
+                },
+                "required": ["id", "answer"],
+            },
+        }
+    },
+    "required": ["answers"],
+}
+
+_FIELD_ANSWER_SYSTEM = (
+    "You fill job-application form fields for a candidate using ONLY the facts in "
+    "the provided answer bank. ABSOLUTE RULES:\n"
+    "- Never invent or assume qualifications, employers, titles, dates, numbers, or "
+    "experience that are not present in the answer-bank data.\n"
+    "- If a field's answer is not directly supported by the data, return an empty "
+    "string for that field.\n"
+    "- Never answer salary/compensation questions or subjective 'why this "
+    "company/role/motivation' questions — return an empty string for those.\n"
+    "- When a field lists options, return EXACTLY one of the given option strings, "
+    "or an empty string if none genuinely fits.\n"
+    "- Keep answers concise and strictly factual."
+)
+
+
+async def answer_form_fields(
+    profile: dict, fields: list[dict]
+) -> dict[str, str]:
+    """Answer unknown application-form fields strictly from the answer bank.
+
+    `fields` is a list of {"id", "label", "options"?(list[str])}. Returns
+    {id: answer}; an empty/whitespace answer means "not grounded — leave blank".
+    Returns {} if no LLM is configured or on error (caller leaves fields blank).
+    Used for pre-fill review only; the human verifies every value before submit.
+    """
+    if not fields or not available():
+        return {}
+    prompt = (
+        "ANSWER BANK (the only facts you may use):\n"
+        f"{json.dumps(profile, ensure_ascii=False)[:10000]}\n\n"
+        "FORM FIELDS to answer (each has an id, a label, and optionally a closed "
+        "set of options):\n"
+        f"{json.dumps(fields, ensure_ascii=False)[:6000]}\n\n"
+        "Return an answer for every field id. Use an empty string whenever the "
+        "answer bank does not directly support an answer."
+    )
+    res = await complete_json(
+        system=_FIELD_ANSWER_SYSTEM,
+        prompt=prompt,
+        schema=_FIELD_ANSWER_SCHEMA,
+        kind="parse",
+    )
+    if not res:
+        return {}
+    out: dict[str, str] = {}
+    for a in res.get("answers", []):
+        try:
+            ans = str(a.get("answer", "")).strip()
+            if ans:
+                out[str(a["id"])] = ans
+        except (KeyError, TypeError, ValueError):
+            continue
+    return out
+
+
 async def tailor_with_llm(applicant: dict, job: dict) -> dict | None:
     """Tailored CV + cover letter, constrained to applicant facts. None if no key."""
     prompt = (

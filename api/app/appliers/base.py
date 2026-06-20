@@ -94,10 +94,15 @@ class Applier(ABC):
         *,
         credentials: dict[str, str] | None = None,
         save_draft: bool = False,
+        profile: dict | None = None,
     ) -> PrefillResult:
         """Fill the form. If `credentials` (the user's own portal login) are
         given and `save_draft` is set, an enterprise applier may sign in and save
-        a draft — never submit. Other appliers ignore both."""
+        a draft — never submit. Other appliers ignore both.
+
+        `profile` is the full answer bank; appliers that support it use an LLM to
+        answer unknown required fields strictly from it (never inventing), leaving
+        sensitive/ungrounded fields blank for the human."""
         raise NotImplementedError
 
 
