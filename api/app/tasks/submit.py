@@ -50,6 +50,10 @@ _CONFIRM_MARKERS = (
     "successfully submitted",
     "your application was submitted",
     "thank you for your interest",
+    "application submitted",
+    "thanks for applying",
+    "submitted your application",
+    "we'll be in touch",
 )
 
 # Text that signals the portal demands an emailed verification/OTP code before it
@@ -118,6 +122,7 @@ async def _submit(app_id: uuid.UUID) -> dict:
         needs_verification = False
         otp_asked = False
         otp_code_received = False
+        submit_diag: str | None = None
         error: str | None = None
 
         from playwright.async_api import async_playwright
@@ -153,19 +158,22 @@ async def _submit(app_id: uuid.UUID) -> dict:
                         if cv_path:
                             cv_attached = await applier.attach_cv(page, cv_path)
                         clicked = await applier.submit(page)
-                        await page.wait_for_timeout(1500)
-                        try:
-                            body = ((await page.content()) or "").lower()
-                            confirmed = clicked and any(
-                                m in body for m in _CONFIRM_MARKERS
-                            )
-                            needs_verification = (
-                                clicked
-                                and not confirmed
-                                and any(m in body for m in _VERIFY_MARKERS)
-                            )
-                        except Exception:  # noqa: BLE001
-                            confirmed = False
+                        # The SPA can take several seconds to transition to the
+                        # confirmation or email-verification screen — poll instead
+                        # of checking once (a too-early check reads the old form).
+                        if clicked:
+                            for _ in range(10):  # ~15s
+                                await page.wait_for_timeout(1500)
+                                try:
+                                    body = ((await page.content()) or "").lower()
+                                except Exception:  # noqa: BLE001
+                                    continue
+                                if any(m in body for m in _CONFIRM_MARKERS):
+                                    confirmed = True
+                                    break
+                                if any(m in body for m in _VERIFY_MARKERS):
+                                    needs_verification = True
+                                    break
 
                         # OTP relay: the portal emailed a code. Ask the user for it
                         # over Telegram and enter it here (browser still open), so
@@ -203,6 +211,21 @@ async def _submit(app_id: uuid.UUID) -> dict:
                                         needs_verification = (not confirmed) and any(
                                             m in body for m in _VERIFY_MARKERS
                                         )
+
+                        # Ambiguous: clicked but neither confirmed nor a verification
+                        # screen appeared — capture any error/alert text so the card
+                        # can tell the human what to check.
+                        if clicked and not confirmed and not needs_verification:
+                            try:
+                                errs = await page.evaluate(
+                                    "()=>[...document.querySelectorAll("
+                                    "'[role=alert],[aria-invalid=true],[class*=error i]')]"
+                                    ".map(e=>(e.innerText||'').trim())"
+                                    ".filter(Boolean).slice(0,4)"
+                                )
+                                submit_diag = "; ".join(errs)[:200] or None
+                            except Exception:  # noqa: BLE001
+                                submit_diag = None
                 except Exception as exc:  # noqa: BLE001
                     error = str(exc)[:300]
                     logger.exception("auto-submit navigation/submit failed")
@@ -226,6 +249,12 @@ async def _submit(app_id: uuid.UUID) -> dict:
             "auto-submit can't receive it. Open the posting and submit there "
             "yourself (your answers are filled and the CV is attached)."
         )
+        ambiguous_note = (
+            "⚠ Clicked submit but couldn't confirm it went through"
+            + (f": {submit_diag}" if submit_diag else " (no confirmation page appeared)")
+            + ". Open the posting to check whether it submitted — if not, finish it "
+            "there (your answers are filled and the CV is attached)."
+        )
         if confirmed:
             from datetime import datetime, timezone
 
@@ -238,6 +267,25 @@ async def _submit(app_id: uuid.UUID) -> dict:
             app.status = ApplicationStatus.needs_attention
             app.missing_fields = [verify_note] + [
                 m for m in (app.missing_fields or []) if m != verify_note
+            ]
+        elif clicked:
+            # Submitted but no confirmation detected — don't claim success and don't
+            # leave it in Ready (risking a double-submit); flag for the human to
+            # verify on the portal.
+            app.status = ApplicationStatus.needs_attention
+            app.missing_fields = [ambiguous_note] + [
+                m for m in (app.missing_fields or []) if m != ambiguous_note
+            ]
+        else:
+            # Couldn't even click submit (error / no button) — surface it.
+            err_note = (
+                "⚠ Couldn't submit automatically: "
+                + (error or "no submit button was found")
+                + ". Open the posting and submit it manually."
+            )
+            app.status = ApplicationStatus.needs_attention
+            app.missing_fields = [err_note] + [
+                m for m in (app.missing_fields or []) if m != err_note
             ]
         session.add(
             ApplicationEvent(
@@ -255,6 +303,7 @@ async def _submit(app_id: uuid.UUID) -> dict:
                     "clicked_submit": clicked,
                     "confirmed": confirmed,
                     "needs_verification": needs_verification,
+                    "diag": submit_diag,
                     "filled": len(prefill.get("filled", {})),
                     "missing": len(prefill.get("missing", [])),
                     "error": error,
@@ -288,13 +337,18 @@ async def _submit(app_id: uuid.UUID) -> dict:
                 "Open the posting and submit there yourself; everything's filled in."
             )
         elif clicked:
+            detail = f" ({submit_diag})" if submit_diag else ""
             msg = (
-                f"⚠️ Tried to submit {job.title} but couldn't confirm it went "
-                "through. Open the posting and check / finish it manually."
+                f"⚠️ {job.title}: clicked submit but couldn't confirm it went "
+                f"through{detail}. Moved to Needs Fixes — open the posting to check "
+                "whether it submitted, and finish it there if not."
             )
         else:
             why = error or "no submit button was found"
-            msg = f"⚠️ Couldn't auto-submit {job.title}: {why}. Review it manually."
+            msg = (
+                f"⚠️ Couldn't auto-submit {job.title}: {why}. Moved to Needs Fixes — "
+                "review it on the board."
+            )
         await notify_user(session, app.user_id, msg)
 
     return {
