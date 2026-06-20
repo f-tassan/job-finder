@@ -272,4 +272,7 @@ class EnterpriseApplier(GenericApplier):
             result["missing"].insert(0, wall)
         result["logged_in"] = logged_in
         result["draft_saved"] = draft_saved
+        # A wall that's still standing means we couldn't reach the form: either no
+        # credential was stored, or the stored one failed to sign in.
+        result["needs_credentials"] = bool(wall)
         return result

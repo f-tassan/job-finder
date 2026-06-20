@@ -113,6 +113,7 @@ class ApplicationOut(BaseModel):
     job: JobOut
     cv_version_id: uuid.UUID | None = None
     keyword_coverage: float | None = None
+    needs_credentials: bool = False
     submitted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime

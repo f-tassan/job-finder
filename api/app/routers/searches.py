@@ -20,6 +20,7 @@ PLATFORMS = {
     "ashby",
     "linkedin",
     "bayt",
+    "company",
     "company_site",
     "gov_portals",
     "email_alerts",

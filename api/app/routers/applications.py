@@ -216,6 +216,29 @@ async def submit_application(
     return await _owned(session, user.id, app_id, with_events=True)
 
 
+@router.post("/{app_id}/auto-submit", status_code=status.HTTP_202_ACCEPTED)
+async def auto_submit_application(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> dict:
+    """Explicitly fill AND submit the form on the browser-worker. Allowed only for
+    standalone ATS forms (never LinkedIn/Bayt); the worker refuses blocked hosts.
+    This is a deliberate, user-initiated finalize — not part of auto-apply."""
+    app = await _owned(session, user.id, app_id)
+    job = await session.get(Job, app.job_id)
+    url = (job.url or "").lower()
+    if "linkedin.com" in url or "bayt.com" in url:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="Auto-submit is disabled for LinkedIn/Bayt — submit there yourself.",
+        )
+    from app.tasks.submit import submit_application as task
+
+    result = task.apply_async(args=[str(app_id)], queue="browser")
+    return {"task_id": result.id, "status": "queued"}
+
+
 @router.get("/{app_id}/screenshot")
 async def get_screenshot(
     app_id: uuid.UUID,

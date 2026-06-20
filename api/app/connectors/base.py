@@ -33,6 +33,7 @@ def get_connector(platform: str) -> Connector | None:
     from app.connectors import (
         ashby,
         bayt,
+        company,
         company_site,
         email_alerts,
         gov_portals,
@@ -47,6 +48,7 @@ def get_connector(platform: str) -> Connector | None:
         "ashby": ashby.AshbyConnector,
         "linkedin": linkedin.LinkedInConnector,
         "bayt": bayt.BaytConnector,
+        "company": company.CompanyConnector,
         "company_site": company_site.CompanySiteConnector,
         "gov_portals": gov_portals.GovPortalsConnector,
         "email_alerts": email_alerts.EmailAlertsConnector,

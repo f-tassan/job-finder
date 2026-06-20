@@ -93,8 +93,10 @@ async def _prefill(app_id: uuid.UUID) -> dict:
                 await browser.close()
 
         draft_saved = bool(result.get("draft_saved"))
+        needs_credentials = bool(result.get("needs_credentials"))
         app.prefilled_answers = result.get("filled", {})
         app.missing_fields = result.get("missing", [])
+        app.needs_credentials = needs_credentials
         if app.status in (ApplicationStatus.discovered, ApplicationStatus.drafting):
             app.status = ApplicationStatus.ready_to_submit
         session.add(
@@ -107,6 +109,7 @@ async def _prefill(app_id: uuid.UUID) -> dict:
                     "missing": len(result.get("missing", [])),
                     "logged_in": bool(result.get("logged_in")),
                     "draft_saved": draft_saved,
+                    "needs_credentials": needs_credentials,
                     "error": error,
                 },
             )
@@ -117,7 +120,13 @@ async def _prefill(app_id: uuid.UUID) -> dict:
 
         n_filled = len(result.get("filled", {}))
         n_missing = len(result.get("missing", []))
-        if draft_saved:
+        if needs_credentials:
+            msg = (
+                f"🔐 {job.title} needs a portal login before it can be filled. "
+                "Add your account for this employer in Settings → Employer portal "
+                "logins, then hit Retry on the card."
+            )
+        elif draft_saved:
             msg = (
                 f"📝 Draft saved on the employer portal: {job.title} — "
                 f"{n_filled} field(s) filled on your account, {n_missing} to "

@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Float, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import Boolean, Float, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -54,6 +54,11 @@ class Application(Base):
     cover_letter: Mapped[str | None] = mapped_column(Text)
     prefilled_answers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
     missing_fields: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
+    # Set by prefill when the portal required a login but no credential was stored
+    # (or login failed): the user must add a login in Settings, then Retry.
+    needs_credentials: Mapped[bool] = mapped_column(
+        Boolean, nullable=False, default=False
+    )
     keyword_coverage: Mapped[float | None] = mapped_column(Float)
     screenshot_path: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime | None] = mapped_column()

@@ -20,6 +20,18 @@ logger = logging.getLogger(__name__)
 
 _FILLABLE_TYPES = {"text", "email", "tel", "url", "search", ""}
 
+# Final-submit buttons, most explicit first. Plain "Apply" is deliberately
+# excluded — on many portals it only reveals the form, it doesn't submit.
+_SUBMIT_SELECTORS = (
+    "#submit_app",
+    'button:has-text("Submit application")',
+    'button:has-text("Submit Application")',
+    'button:has-text("Submit your application")',
+    'button[type="submit"]',
+    'input[type="submit"]',
+    'button:has-text("Submit")',
+)
+
 
 async def _label_blob(root: Any, el: Any) -> str:
     name = (await el.get_attribute("name")) or ""
@@ -111,3 +123,18 @@ class GenericApplier(Applier):
     ) -> PrefillResult:
         # Static forms have no account/draft concept; credentials are ignored.
         return await self._sweep(page, values)
+
+    async def submit(self, page: Any) -> bool:
+        """Click the form's final submit button. Returns True if one was clicked.
+        Used ONLY by the explicit, user-confirmed auto-submit task — never by the
+        normal prefill pipeline."""
+        for sel in _SUBMIT_SELECTORS:
+            try:
+                el = await page.query_selector(sel)
+                if el and await el.is_visible():
+                    await el.click()
+                    await page.wait_for_timeout(3000)
+                    return True
+            except Exception:  # noqa: BLE001
+                logger.debug("submit click failed: %s", sel, exc_info=True)
+        return False

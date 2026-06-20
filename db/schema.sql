@@ -108,6 +108,7 @@ CREATE TABLE applications (
     cover_letter      TEXT,
     prefilled_answers JSONB NOT NULL DEFAULT '{}'::jsonb,
     missing_fields    JSONB NOT NULL DEFAULT '[]'::jsonb,  -- fields the human must complete
+    needs_credentials BOOLEAN NOT NULL DEFAULT false,      -- portal login required but not stored
     keyword_coverage  DOUBLE PRECISION,
     screenshot_path   TEXT,
     submitted_at      TIMESTAMPTZ,
