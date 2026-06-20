@@ -54,6 +54,7 @@ export interface Application {
   job: Job;
   cv_version_id: string | null;
   keyword_coverage: number | null;
+  needs_credentials: boolean;
   submitted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -123,6 +124,7 @@ export const PLATFORMS = [
   "ashby",
   "linkedin",
   "bayt",
+  "company",
   "company_site",
   "gov_portals",
   "email_alerts",

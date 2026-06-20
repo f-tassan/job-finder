@@ -3,16 +3,21 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useState } from "react";
 import { apiGet, apiSend, ApiError } from "@/lib/api";
-import {
-  PIF_COMPANIES,
-  PIF_SECTORS,
-  companyHost,
-  type PifCompany,
-} from "@/lib/pifCompanies";
-import type { PortalCredential } from "@/lib/types";
+import type { PortalCredential, SavedSearch } from "@/lib/types";
 
 type Draft = { username: string; password: string };
 const EMPTY_DRAFT: Draft = { username: "", password: "" };
+
+function hostFromUrl(url: string): string {
+  try {
+    return new URL(url).hostname.toLowerCase().replace(/^www\./, "");
+  } catch {
+    return "";
+  }
+}
+
+// A company login row, derived from a "company" saved search.
+type CompanyLogin = { name: string; url: string; host: string };
 
 export function PortalCredentialsCard() {
   const qc = useQueryClient();
@@ -26,6 +31,21 @@ export function PortalCredentialsCard() {
     queryKey: ["credentials"],
     queryFn: () => apiGet<PortalCredential[]>("/credentials"),
   });
+  const { data: searches } = useQuery({
+    queryKey: ["searches"],
+    queryFn: () => apiGet<SavedSearch[]>("/searches"),
+  });
+
+  // Each "company" search becomes a login row (first careers URL → host).
+  const companies: CompanyLogin[] = (searches ?? [])
+    .filter((s) => s.platform === "company")
+    .map((s) => {
+      const f = (s.filters || {}) as Record<string, unknown>;
+      const urls = Array.isArray(f.careers_urls) ? (f.careers_urls as string[]) : [];
+      const url = urls[0] || "";
+      return { name: s.name, url, host: hostFromUrl(url) };
+    })
+    .filter((c) => c.host);
 
   const savedByHost = new Map((creds ?? []).map((c) => [c.host, c]));
   const draftFor = (host: string) => drafts[host] ?? EMPTY_DRAFT;
@@ -61,8 +81,7 @@ export function PortalCredentialsCard() {
       });
       flash(`Saved login for ${v.label || v.host}.`);
     },
-    onError: (e) =>
-      setErr(e instanceof ApiError ? e.message : "Could not save login."),
+    onError: (e) => setErr(e instanceof ApiError ? e.message : "Could not save login."),
     onSettled: () => setBusyHost(null),
   });
 
@@ -71,8 +90,8 @@ export function PortalCredentialsCard() {
     onSuccess: () => qc.invalidateQueries({ queryKey: ["credentials"] }),
   });
 
-  // Per-host credential editor. A plain function returning JSX (NOT a nested
-  // component) so the inputs keep focus across the parent's re-renders.
+  // Per-host editor — a plain render function (NOT a nested component) so the
+  // inputs keep focus across re-renders.
   const renderCred = (host: string, label: string, saved?: PortalCredential) => {
     const isEditing = editing.has(host) || !saved;
     const d = draftFor(host);
@@ -148,63 +167,59 @@ export function PortalCredentialsCard() {
     );
   };
 
-  const bySector = (sector: string): PifCompany[] =>
-    PIF_COMPANIES.filter((c) => c.sector === sector);
-
-  // saved logins for hosts that aren't in the PIF catalog
-  const catalogHosts = new Set(PIF_COMPANIES.map((c) => companyHost(c.url)));
-  const otherSaved = (creds ?? []).filter((c) => !catalogHosts.has(c.host));
+  const companyHosts = new Set(companies.map((c) => c.host));
+  const otherSaved = (creds ?? []).filter((c) => !companyHosts.has(c.host));
 
   return (
     <div className="mt-4 max-w-3xl space-y-5 rounded-xl border border-slate-800 bg-slate-900 p-6">
       <div>
         <h2 className="text-sm font-semibold">Employer portal logins</h2>
         <p className="mt-1 text-xs text-slate-400">
-          PIF portfolio companies are listed below. Click a company to open its
-          careers site and{" "}
+          One row per company from your{" "}
+          <a href="/searches" className="text-indigo-300 hover:text-indigo-200">
+            Searches
+          </a>
+          . Click a company to open its careers site and{" "}
           <span className="text-slate-300">create your own account</span>, then enter
           that username &amp; password here. The pre-fill worker uses it to sign in and{" "}
-          <span className="text-slate-300">save a draft</span> on your account — it
-          never submits and never creates accounts. Passwords are encrypted at rest and
-          never shown again.
+          <span className="text-slate-300">save a draft</span> — it never submits and
+          never creates accounts. Many portals need no login; those just fill directly.
+          Passwords are encrypted at rest and never shown again.
         </p>
       </div>
 
-      <div className="space-y-5">
-        {PIF_SECTORS.map((sector) => (
-          <div key={sector}>
-            <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
-              {sector}
-            </h3>
-            <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800">
-              {bySector(sector).map((c) => {
-                const host = companyHost(c.url);
-                return (
-                  <li
-                    key={c.name}
-                    className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
-                  >
-                    <div className="min-w-0">
-                      <a
-                        href={c.url}
-                        target="_blank"
-                        rel="noopener noreferrer"
-                        className="text-sm font-medium text-indigo-300 underline decoration-dotted underline-offset-2 hover:text-indigo-200"
-                      >
-                        {c.name} ↗
-                      </a>
-                      <p className="truncate text-xs text-slate-500">{host}</p>
-                    </div>
-                    {renderCred(host, c.name, savedByHost.get(host))}
-                  </li>
-                );
-              })}
-            </ul>
-          </div>
-        ))}
-      </div>
+      {companies.length > 0 ? (
+        <ul className="divide-y divide-slate-800 rounded-lg border border-slate-800">
+          {companies.map((c) => (
+            <li
+              key={c.host + c.name}
+              className="flex flex-col gap-2 px-3 py-2.5 sm:flex-row sm:items-center sm:justify-between"
+            >
+              <div className="min-w-0">
+                <a
+                  href={c.url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-sm font-medium text-indigo-300 underline decoration-dotted underline-offset-2 hover:text-indigo-200"
+                >
+                  {c.name} ↗
+                </a>
+                <p className="truncate text-xs text-slate-500">{c.host}</p>
+              </div>
+              {renderCred(c.host, c.name, savedByHost.get(c.host))}
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="text-sm text-slate-400">
+          No companies yet — add some under{" "}
+          <a href="/searches" className="text-indigo-300 hover:text-indigo-200">
+            Searches
+          </a>{" "}
+          and they&apos;ll appear here for credentials.
+        </p>
+      )}
 
-      {/* logins saved for portals not in the PIF catalog */}
       {otherSaved.length > 0 && (
         <div>
           <h3 className="mb-2 text-xs font-semibold uppercase tracking-wide text-slate-500">
@@ -229,10 +244,7 @@ export function PortalCredentialsCard() {
         </div>
       )}
 
-      <OtherPortalForm
-        onSave={(v) => save.mutate(v)}
-        saving={save.isPending && busyHost !== null}
-      />
+      <OtherPortalForm onSave={(v) => save.mutate(v)} saving={save.isPending} />
 
       {msg && <p className="text-sm text-indigo-300">{msg}</p>}
       {err && <p className="text-sm text-red-400">{err}</p>}
@@ -240,7 +252,7 @@ export function PortalCredentialsCard() {
   );
 }
 
-// Free-form add for a portal that isn't a listed PIF company.
+// Free-form add for a portal that isn't tied to a company search.
 function OtherPortalForm({
   onSave,
   saving,
@@ -260,7 +272,7 @@ function OtherPortalForm({
         onClick={() => setOpen(true)}
         className="text-sm text-indigo-300 hover:text-indigo-200"
       >
-        + Add another portal (not listed)
+        + Add a portal login manually
       </button>
     );
   }
