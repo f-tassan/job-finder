@@ -124,20 +124,60 @@ async def _prefill(app_id: uuid.UUID) -> dict:
 
         draft_saved = bool(result.get("draft_saved"))
         needs_credentials = bool(result.get("needs_credentials"))
-        app.prefilled_answers = result.get("filled", {})
-        app.missing_fields = result.get("missing", [])
+        filled = result.get("filled", {})
+        missing = list(result.get("missing", []))
+        # Surface a hard failure as a visible gap so the card explains itself.
+        if error:
+            missing.insert(0, f"⚠ Couldn't load/fill the form: {error}")
+        # Nothing filled and no error/login flag means we reached a page but found
+        # no application form we could use (dead link, sign-in wall, an unsupported
+        # widget, or a discovery-only source like LinkedIn). Say so, otherwise the
+        # card lands in "Needs Fixes" with no explanation of what to do.
+        elif not needs_credentials and not draft_saved and not filled:
+            missing.insert(
+                0,
+                "⚠ No fillable application form was found at this link — it may "
+                "require sign-in, use an unsupported form, or be a discovery-only "
+                "source (e.g. LinkedIn). Open the posting to apply manually.",
+            )
+
+        # Genuine gaps = required fields we couldn't fill that AREN'T the
+        # deliberately-blank sensitive ones (salary / "why us", which the human
+        # always completes at final submit and don't count as a pipeline problem).
+        hard_gaps = [m for m in missing if "(left blank — sensitive)" not in m]
+        # An application is only "ready" when the pipeline finished cleanly: no
+        # error, no login needed, something actually got filled, and no genuine
+        # required gaps. Otherwise it goes to "needs attention" for the human.
+        has_issue = bool(error) or needs_credentials or (
+            not draft_saved and (len(filled) == 0 or bool(hard_gaps))
+        )
+
+        app.prefilled_answers = filled
+        app.missing_fields = missing
         app.ai_suggested_fields = result.get("ai_suggested", [])
         app.needs_credentials = needs_credentials
-        if app.status in (ApplicationStatus.discovered, ApplicationStatus.drafting):
-            app.status = ApplicationStatus.ready_to_submit
+        target = (
+            ApplicationStatus.needs_attention
+            if has_issue
+            else ApplicationStatus.ready_to_submit
+        )
+        if app.status in (
+            ApplicationStatus.discovered,
+            ApplicationStatus.drafting,
+            ApplicationStatus.needs_attention,
+            ApplicationStatus.ready_to_submit,
+        ):
+            app.status = target
         session.add(
             ApplicationEvent(
                 application_id=app.id,
                 type="draft_saved" if draft_saved else "prefilled",
                 payload={
                     "applier": applier.name,
-                    "filled": len(result.get("filled", {})),
-                    "missing": len(result.get("missing", [])),
+                    "filled": len(filled),
+                    "missing": len(missing),
+                    "hard_gaps": len(hard_gaps),
+                    "status": target.value,
                     "logged_in": bool(result.get("logged_in")),
                     "draft_saved": draft_saved,
                     "needs_credentials": needs_credentials,
@@ -149,8 +189,7 @@ async def _prefill(app_id: uuid.UUID) -> dict:
 
         from app.services.notify import notify_user
 
-        n_filled = len(result.get("filled", {}))
-        n_missing = len(result.get("missing", []))
+        n_filled = len(filled)
         if needs_credentials:
             msg = (
                 f"🔐 {job.title} needs a portal login before it can be filled. "
@@ -160,13 +199,27 @@ async def _prefill(app_id: uuid.UUID) -> dict:
         elif draft_saved:
             msg = (
                 f"📝 Draft saved on the employer portal: {job.title} — "
-                f"{n_filled} field(s) filled on your account, {n_missing} to "
+                f"{n_filled} field(s) filled on your account, {len(missing)} to "
                 "complete. Log in and submit when ready."
+            )
+        elif has_issue:
+            why = (
+                f"couldn't load/fill the form ({error})"
+                if error
+                else (
+                    "nothing could be auto-filled"
+                    if len(filled) == 0
+                    else f"{len(hard_gaps)} required field(s) need you"
+                )
+            )
+            msg = (
+                f"⚠️ Needs fixes: {job.title} — {why}. Open it on the board to "
+                "complete the gaps, then move it to Ready."
             )
         else:
             msg = (
-                f"🧩 Ready to review: {job.title} — pre-filled "
-                f"{n_filled} field(s), {n_missing} to complete."
+                f"✅ Ready to submit: {job.title} — pre-filled "
+                f"{n_filled} field(s); only your final submit remains."
             )
         await notify_user(session, app.user_id, msg)
     return {

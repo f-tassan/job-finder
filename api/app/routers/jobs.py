@@ -89,3 +89,27 @@ async def trigger_discovery(_: AppUser = Depends(current_admin)) -> dict:
 
     result = run_discovery.delay()
     return {"task_id": result.id, "status": "queued"}
+
+
+@router.get("/discovery-status/{task_id}")
+async def discovery_status(
+    task_id: str, _: AppUser = Depends(current_user)
+) -> dict:
+    """Progress of a discovery run for the ranked-jobs progress bar. Reads the
+    Celery result backend; returns {state, pct, phase?, detail?, summary?}."""
+    from app.tasks.celery_app import celery_app
+
+    res = celery_app.AsyncResult(task_id)
+    state = res.state
+    info = res.info if isinstance(res.info, dict) else {}
+    out: dict = {"state": state, "pct": int(info.get("pct", 0))}
+    if state == "PROGRESS":
+        out["phase"] = info.get("phase")
+        out["detail"] = info.get("detail")
+    elif state == "SUCCESS":
+        out["pct"] = 100
+        out["summary"] = res.result if isinstance(res.result, dict) else None
+    elif state == "FAILURE":
+        out["pct"] = 100
+        out["error"] = str(res.info)[:300]
+    return out

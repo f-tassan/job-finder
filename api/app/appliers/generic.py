@@ -111,6 +111,24 @@ async def _label_blob(root: Any, el: Any) -> tuple[str, str]:
                 label_text = (await lbl.inner_text()) or ""
         except Exception:  # noqa: BLE001
             pass
+    # Fallback for custom question widgets without a `label[for]` (e.g. Lever's
+    # `cards[uuid][field0]` inputs): use the enclosing question block's text so
+    # the field gets a human label instead of its raw machine name.
+    if not label_text:
+        try:
+            anc = await el.evaluate(
+                "e => { const q = e.closest("
+                "'.application-question, fieldset, [data-qa=application-question]');"
+                " if (!q) return '';"
+                " const l = q.querySelector('.text, .application-label, legend, label');"
+                " return l ? l.innerText : ''; }"
+            )
+            # Real question text is mixed-case/has spaces; ignore a bare tag name
+            # (the unit-test fake returns e.g. "INPUT" from evaluate()).
+            if anc and anc.strip() and not anc.strip().isupper():
+                label_text = anc.strip()
+        except Exception:  # noqa: BLE001
+            pass
     blob = " ".join([name, el_id, placeholder, aria, auto, label_text]).strip()
     label = _clean_label(label_text, aria, placeholder, name.replace("_", " "))
     return blob, label

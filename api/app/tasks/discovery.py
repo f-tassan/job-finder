@@ -38,15 +38,20 @@ from app.tasks.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-async def _ingest(session: AsyncSession) -> tuple[int, int]:
-    """Run all enabled searches; upsert normalized jobs. Returns (searches, fetched)."""
+async def _ingest(session: AsyncSession, on_search=None) -> tuple[int, int]:
+    """Run all enabled searches; upsert normalized jobs. Returns (searches, fetched).
+
+    `on_search(i, total, name)` is called before each search so the caller can
+    report progress (fetching a source is the slow, network-bound phase)."""
     searches = (
         (await session.execute(select(SavedSearch).where(SavedSearch.enabled)))
         .scalars()
         .all()
     )
     fetched = 0
-    for s in searches:
+    for i, s in enumerate(searches):
+        if on_search:
+            on_search(i, len(searches), s.platform)
         connector = get_connector(s.platform)
         if connector is None:
             logger.warning("no connector for platform %s", s.platform)
@@ -246,10 +251,25 @@ async def _match_user(
     return matched, auto_tracked, auto_prepare
 
 
-async def _run_discovery() -> dict:
+async def _run_discovery(progress=None) -> dict:
+    """`progress(phase, pct, detail)` (optional) reports 0–100% so the UI can show
+    a bar. Phases: fetching sources (≤60%), embedding (~65%), ranking (70–98%)."""
+
+    def emit(phase: str, pct: float, detail: str = "") -> None:
+        if progress:
+            progress(phase, max(0, min(100, round(pct))), detail)
+
     async with SessionLocal() as session:
-        n_searches, fetched = await _ingest(session)
+        emit("Fetching sources", 3)
+        n_searches, fetched = await _ingest(
+            session,
+            on_search=lambda i, t, name: emit(
+                "Fetching sources", 5 + 55 * i / max(t, 1), name
+            ),
+        )
+        emit("Embedding new jobs", 62)
         embedded = await _embed_new_jobs(session)
+        emit("Loading catalog", 68)
         jobs = (
             (await session.execute(select(Job).where(Job.embedding.is_not(None))))
             .scalars()
@@ -260,7 +280,8 @@ async def _run_discovery() -> dict:
         total_auto_prepared = 0
         from app.services.notify import notify_user
 
-        for user in users:
+        for ui, user in enumerate(users):
+            emit("Ranking matches", 70 + 28 * ui / max(len(users), 1), user.email)
             matched, auto_tracked, auto_prepare = await _match_user(
                 session, user, jobs
             )
@@ -297,9 +318,23 @@ async def _run_discovery() -> dict:
         "auto_prepared": total_auto_prepared,
     }
     logger.info("discovery complete: %s", summary)
+    if progress:
+        progress("Done", 100, "")
     return summary
 
 
-@celery_app.task(name="discovery.run")
-def run_discovery() -> dict:
-    return asyncio.run(_run_discovery())
+@celery_app.task(bind=True, name="discovery.run")
+def run_discovery(self) -> dict:
+    """Discovery run. Reports PROGRESS meta ({phase, pct, detail}) as it goes so
+    the ranked-jobs page can render a progress bar via /jobs/discovery-status."""
+
+    def progress(phase: str, pct: int, detail: str = "") -> None:
+        try:
+            self.update_state(
+                state="PROGRESS",
+                meta={"phase": phase, "pct": pct, "detail": detail},
+            )
+        except Exception:  # noqa: BLE001 - progress is best-effort, never fatal
+            pass
+
+    return asyncio.run(_run_discovery(progress))

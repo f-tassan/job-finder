@@ -1,6 +1,7 @@
 export type ApplicationStatus =
   | "discovered"
   | "drafting"
+  | "needs_attention"
   | "ready_to_submit"
   | "submitted"
   | "interview"
@@ -11,6 +12,7 @@ export type ApplicationStatus =
 export const STATUSES: ApplicationStatus[] = [
   "discovered",
   "drafting",
+  "needs_attention",
   "ready_to_submit",
   "submitted",
   "interview",
@@ -22,6 +24,7 @@ export const STATUSES: ApplicationStatus[] = [
 export const STATUS_LABELS: Record<ApplicationStatus, string> = {
   discovered: "Discovered",
   drafting: "Drafting",
+  needs_attention: "Needs Fixes",
   ready_to_submit: "Ready",
   submitted: "Submitted",
   interview: "Interview",

@@ -16,6 +16,10 @@ from app.models.base import Base
 class ApplicationStatus(str, enum.Enum):
     discovered = "discovered"
     drafting = "drafting"
+    # Pipeline ran but the form couldn't be fully prepared (error, login needed,
+    # nothing fillable, or genuine unfilled required fields) — the human opens it,
+    # fixes the gaps, and advances it to ready_to_submit.
+    needs_attention = "needs_attention"
     ready_to_submit = "ready_to_submit"
     submitted = "submitted"
     interview = "interview"
