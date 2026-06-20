@@ -266,11 +266,18 @@ class GenericApplier(Applier):
                 # hidden required mirror) — comboboxes are handled separately, and
                 # typing into the filter box doesn't actually pick an option.
                 el_id = (await el.get_attribute("id")) or ""
+                el_name = (await el.get_attribute("name")) or ""
                 if (
                     el_id.startswith("react-select-")
                     or (await el.get_attribute("role")) == "combobox"
                     or (await el.get_attribute("aria-hidden")) == "true"
                 ):
+                    continue
+                # Never fill a honeypot — it's an invisible bot-trap; filling it
+                # flags the submission as a bot (Oracle ORC ships one).
+                if "honey" in f"{el_id} {el_name}".lower() or "honey" in (
+                    (await el.get_attribute("aria-label")) or ""
+                ).lower():
                     continue
                 blob, label = await _label_blob(root, el)
                 required = (

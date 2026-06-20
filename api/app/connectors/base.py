@@ -40,6 +40,7 @@ def get_connector(platform: str) -> Connector | None:
         greenhouse,
         lever,
         linkedin,
+        oracle,
     )
 
     mapping: dict[str, type[Connector]] = {
@@ -52,6 +53,7 @@ def get_connector(platform: str) -> Connector | None:
         "company_site": company_site.CompanySiteConnector,
         "gov_portals": gov_portals.GovPortalsConnector,
         "email_alerts": email_alerts.EmailAlertsConnector,
+        "oracle": oracle.OracleConnector,
     }
     cls = mapping.get(platform)
     return cls() if cls else None
