@@ -28,6 +28,7 @@ from app.models import (
     Application,
     ApplicationEvent,
     ApplicationStatus,
+    CvVersion,
     Job,
 )
 from app.tasks.celery_app import celery_app
@@ -73,12 +74,28 @@ async def _submit(app_id: uuid.UUID) -> dict:
 
         credentials = await credentials_for_url(session, app.user_id, job.url)
 
+        # CV to attach: the application's tailored CV if present, else the user's
+        # default CV version. Shared `files` volume → readable by the worker.
+        cv_path: str | None = app.tailored_cv_path
+        if not cv_path:
+            default_cv = (
+                await session.execute(
+                    select(CvVersion)
+                    .where(CvVersion.user_id == app.user_id)
+                    .order_by(CvVersion.is_default.desc(), CvVersion.created_at.desc())
+                )
+            ).scalars().first()
+            cv_path = default_cv.file_path if default_cv else None
+        if cv_path and not Path(cv_path).exists():
+            cv_path = None
+
         shot_path = str(
             Path(settings.files_dir) / str(app.user_id) / "submit" / f"{app.id}.png"
         )
         Path(shot_path).parent.mkdir(parents=True, exist_ok=True)
 
         prefill = {"filled": {}, "missing": []}
+        cv_attached = False
         clicked = False
         confirmed = False
         error: str | None = None
@@ -109,6 +126,8 @@ async def _submit(app_id: uuid.UUID) -> dict:
                     if prefill.get("needs_credentials"):
                         error = "portal requires a login that isn't stored"
                     else:
+                        if cv_path:
+                            cv_attached = await applier.attach_cv(page, cv_path)
                         clicked = await applier.submit(page)
                         await page.wait_for_timeout(1500)
                         try:
@@ -144,6 +163,7 @@ async def _submit(app_id: uuid.UUID) -> dict:
                 type="submitted_auto" if confirmed else "submit_attempt",
                 payload={
                     "applier": applier.name,
+                    "cv_attached": cv_attached,
                     "clicked_submit": clicked,
                     "confirmed": confirmed,
                     "filled": len(prefill.get("filled", {})),

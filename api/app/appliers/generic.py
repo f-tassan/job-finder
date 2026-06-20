@@ -124,6 +124,42 @@ class GenericApplier(Applier):
         # Static forms have no account/draft concept; credentials are ignored.
         return await self._sweep(page, values)
 
+    async def attach_cv(self, page: Any, cv_path: str) -> bool:
+        """Attach the CV to the form's résumé file input. File inputs are usually
+        hidden behind styled drag-drop zones, so we don't filter by visibility —
+        set_input_files works on hidden inputs. Prefers a résumé-looking input,
+        else the first file input."""
+        try:
+            inputs = await page.query_selector_all('input[type="file"]')
+        except Exception:  # noqa: BLE001
+            return False
+        if not inputs:
+            return False
+        best = None
+        for el in inputs:
+            try:
+                blob = " ".join(
+                    [
+                        (await el.get_attribute("name")) or "",
+                        (await el.get_attribute("id")) or "",
+                        (await el.get_attribute("aria-label")) or "",
+                        (await el.get_attribute("accept")) or "",
+                    ]
+                ).lower()
+                if any(h in blob for h in ("resume", "cv", "attachment")):
+                    best = el
+                    break
+            except Exception:  # noqa: BLE001
+                continue
+        target = best or inputs[0]
+        try:
+            await target.set_input_files(cv_path)
+            await page.wait_for_timeout(1500)
+            return True
+        except Exception:  # noqa: BLE001
+            logger.debug("attach_cv failed", exc_info=True)
+            return False
+
     async def submit(self, page: Any) -> bool:
         """Click the form's final submit button. Returns True if one was clicked.
         Used ONLY by the explicit, user-confirmed auto-submit task — never by the
