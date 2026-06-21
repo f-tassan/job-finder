@@ -209,6 +209,76 @@ async def _fill_react_select(root: Any, combo: Any, value: str) -> str | None:
         return None
 
 
+# Required "I agree to the terms / privacy / declaration" consent boxes gate
+# submission on many ATS (Oracle ORC's legal-disclaimer-checkbox blocks with
+# "You need to agree to the terms and conditions"). We tick the *required*
+# application-consent boxes — never optional marketing opt-ins.
+_CONSENT_KW = (
+    "terms",
+    "condition",
+    "i agree",
+    "consent",
+    "acknowledg",
+    "privacy",
+    "disclaimer",
+    "declaration",
+    "i have read",
+    "read and",
+    "data protection",
+    "i confirm",
+)
+_CONSENT_SKIP = ("marketing", "newsletter", "promotional", "subscribe")
+
+
+async def _check_consent_boxes(root: Any, filled: dict[str, str]) -> None:
+    """Tick required application-consent checkboxes so submission isn't blocked."""
+    try:
+        boxes = await root.query_selector_all('input[type="checkbox"]')
+    except Exception:  # noqa: BLE001
+        return
+    for el in boxes:
+        try:
+            if (await el.get_attribute("aria-hidden")) == "true":
+                continue
+            if await el.is_checked():
+                continue
+            eid = (await el.get_attribute("id")) or ""
+            label = ""
+            if eid:
+                lbl = await root.query_selector(f'label[for="{eid}"]')
+                if lbl:
+                    label = (await lbl.inner_text()) or ""
+            label = label or (await el.get_attribute("aria-label")) or ""
+            low = label.lower()
+            if any(s in low for s in _CONSENT_SKIP):
+                continue
+            required = (
+                (await el.get_attribute("required")) is not None
+                or (await el.get_attribute("aria-required")) == "true"
+            )
+            if not (required or any(k in low for k in _CONSENT_KW)):
+                continue
+            # Tick it: prefer a real check; fall back to label click, then JS.
+            try:
+                await el.check(timeout=2000)
+            except Exception:  # noqa: BLE001
+                try:
+                    if eid:
+                        lbl = await root.query_selector(f'label[for="{eid}"]')
+                        if lbl:
+                            await lbl.click()
+                    if not await el.is_checked():
+                        await el.evaluate(
+                            "e=>{e.checked=true;"
+                            "e.dispatchEvent(new Event('change',{bubbles:true}));}"
+                        )
+                except Exception:  # noqa: BLE001
+                    continue
+            filled[(" ".join(label.split())[:80] or "Consent") + " ✓"] = "agreed"
+        except Exception:  # noqa: BLE001
+            continue
+
+
 class GenericApplier(Applier):
     name = "generic"
 
@@ -411,6 +481,9 @@ class GenericApplier(Applier):
                         missing.append(label)
             except Exception:  # noqa: BLE001
                 logger.debug("combobox prefill skipped", exc_info=True)
+
+        # --- required consent / terms checkboxes ----------------------------
+        await _check_consent_boxes(root, filled)
 
         # --- LLM fallback for the unknown required fields --------------------
         if profile and unanswered:
