@@ -94,6 +94,31 @@ def _esc(s: str | None) -> str:
     )
 
 
+async def notify_job_card(
+    session,
+    user_id,
+    app_id,
+    job: Job,
+    *,
+    score: float | None = None,
+    header: str = "🆕 <b>New job discovered</b>",
+) -> bool:
+    """Send one job as a card with action buttons to the user's chat. Shared by
+    discovery and by manual track/add so every tracked job looks identical.
+    No-op (returns False) if the user has no chat configured."""
+    from app.services.notify import chat_id_for_user, send_telegram
+
+    chat_id = await chat_id_for_user(session, user_id)
+    if not chat_id:
+        return False
+    return await send_telegram(
+        chat_id,
+        format_job_html(job, score, header=header),
+        parse_mode="HTML",
+        reply_markup=job_buttons(str(app_id), linkedin="linkedin" in (job.source or "")),
+    )
+
+
 def format_job_html(
     job: Job, score: float | None = None, *, header: str | None = None
 ) -> str:

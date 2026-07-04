@@ -79,6 +79,20 @@ async def track_job(
     )
     await session.commit()
     await session.refresh(app)
+
+    # Send the same job card to Telegram as discovery does, so a manually tracked
+    # job behaves like an auto-discovered one (buttons: generate CV / letter,
+    # I applied, skip). Its relevance score, if any, rides along.
+    from app.bot import notify_job_card
+
+    score = await session.scalar(
+        select(JobMatch.relevance_score).where(
+            JobMatch.user_id == user.id, JobMatch.job_id == job_id
+        )
+    )
+    await notify_job_card(
+        session, user.id, app.id, job, score=score, header="🆕 <b>Job tracked</b>"
+    )
     return app
 
 

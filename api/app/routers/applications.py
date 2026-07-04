@@ -107,6 +107,16 @@ async def create_application(
         )
     )
     await session.commit()
+
+    # A manually added job in `discovered` gets the same Telegram card as a
+    # discovered one, so it can be actioned (generate CV/letter, applied, skip)
+    # from the chat too. Manual adds have no relevance score.
+    if app.status == ApplicationStatus.discovered:
+        from app.bot import notify_job_card
+
+        await notify_job_card(
+            session, user.id, app.id, job, header="🆕 <b>Job added</b>"
+        )
     return await _owned(session, user.id, app.id, with_events=True)
 
 
