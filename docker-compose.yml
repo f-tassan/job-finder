@@ -1,6 +1,8 @@
 # job-finder — full stack. `cp .env.example .env`, fill it, then `docker compose up -d --build`.
 # Services: db (postgres+pgvector), redis, api (FastAPI), worker (Celery),
-# browser-worker (Celery+Playwright), beat (scheduler), web (Next.js), caddy (HTTPS proxy).
+# browser-worker (Celery+Playwright, discovery rendering only), beat (scheduler),
+# bot (Telegram long-polling — the primary action surface), web (Next.js),
+# caddy (HTTPS proxy).
 
 name: job-finder
 
@@ -63,13 +65,11 @@ services:
 
   browser-worker:
     # Playwright image ships the browser system deps; install Python app deps on top.
+    # Discovery only: renders JavaScript careers portals (render.careers) that a
+    # static fetch can't read. concurrency=1 keeps the browsing human-paced.
     build:
       context: ./api
       dockerfile: Dockerfile.browser
-    # concurrency=1: the LLM browser agent makes many rapid model calls per form, so
-    # running two in parallel trips the OpenAI rate limit (429s) and slows every run.
-    # Serialize browser jobs. (Trade-off: a submit paused waiting for a Telegram OTP
-    # briefly blocks the queue; the OTP wait is short and this is rare.)
     command: celery -A app.tasks.celery_app worker -Q browser -l info --concurrency=1
     env_file: .env
     depends_on:
@@ -83,6 +83,25 @@ services:
       timeout: 10s
       retries: 5
       start_period: 30s
+
+  bot:
+    # Telegram bot: long-polls getUpdates (must be the ONLY getUpdates consumer)
+    # and handles commands + inline-button taps: generate CV/letter, mark
+    # applied, skip, resolve apply links.
+    build: ./api
+    command: python -m app.bot
+    env_file: .env
+    depends_on:
+      db: { condition: service_healthy }
+      redis: { condition: service_healthy }
+    volumes:
+      - files:/data/files
+    healthcheck:
+      test: ["CMD-SHELL", "pgrep -f 'app.bot' > /dev/null"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 15s
 
   beat:
     build: ./api

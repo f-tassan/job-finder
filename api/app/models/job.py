@@ -36,9 +36,9 @@ class Job(Base):
 
     @property
     def apply_kind(self) -> str | None:
-        """Resolved application kind for LinkedIn postings, cached during
-        prefill/submit: 'offsite' (redirects to a real ATS we can submit),
-        'easyapply' (on LinkedIn — never auto-submit), or None (not yet resolved
+        """Resolved application kind for LinkedIn postings (cached when the user
+        asks for the apply link): 'offsite' (redirects to the employer's own
+        form), 'easyapply' (form lives on LinkedIn), or None (not yet resolved
         / not a LinkedIn job)."""
         return (self.raw or {}).get("apply_kind")
 

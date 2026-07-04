@@ -1,9 +1,11 @@
-"""Tailor an application: build an ATS CV + cover letter, render the PDF, and
-move the application to `drafting`."""
+"""Tailor an application: build an ATS CV and/or cover letter (cheap model),
+render PDFs, move the application to `ready`, and deliver the documents to the
+user on Telegram so they can attach them while applying manually."""
 from __future__ import annotations
 
 import asyncio
 import logging
+import re
 import uuid
 from pathlib import Path
 
@@ -26,7 +28,14 @@ from app.tasks.celery_app import celery_app
 logger = logging.getLogger(__name__)
 
 
-async def _tailor(app_id: uuid.UUID) -> dict:
+def _doc_name(kind: str, job: Job) -> str:
+    """Filename the user sees in Telegram, e.g. CV_Acme_Data_Engineer.pdf."""
+    stem = "_".join(p for p in (job.company, job.title) if p)
+    stem = re.sub(r"[^\w؀-ۿ]+", "_", stem).strip("_")[:60] or "job"
+    return f"{kind}_{stem}.pdf"
+
+
+async def _tailor(app_id: uuid.UUID, make_cv: bool, make_letter: bool) -> dict:
     async with SessionLocal() as session:
         app = await session.get(Application, app_id)
         if app is None:
@@ -62,32 +71,8 @@ async def _tailor(app_id: uuid.UUID) -> dict:
             "description": job.description,
         }
 
-        # Generate a cover letter only when the application form actually has one
-        # (detected at pre-fill: a "cover letter" field is flagged sensitive in
-        # missing_fields). If the job hasn't been pre-filled yet we don't know, so
-        # generate one to be safe. Saves tokens on forms that never ask for one.
-        mf = [str(m).lower() for m in (app.missing_fields or [])]
-        prefilled = bool(app.missing_fields) or bool(app.prefilled_answers)
-        # A cover letter is warranted when the form has a literal cover-letter
-        # field OR a free-text motivation / "why this company" question.
-        _cover_signals = (
-            "cover letter",
-            "cover_letter",
-            "motivation",
-            "why do you",
-            "why this",
-            "why us",
-            "why join",
-            "why you want",
-            "tell us why",
-        )
-        form_has_cover_letter = any(
-            any(sig in m for sig in _cover_signals) for m in mf
-        )
-        want_cover_letter = form_has_cover_letter or not prefilled
-
         result = await tailoring.tailor(
-            applicant, job_dict, want_cover_letter=want_cover_letter
+            applicant, job_dict, want_cv=make_cv, want_cover_letter=make_letter
         )
 
         contact = {
@@ -97,24 +82,35 @@ async def _tailor(app_id: uuid.UUID) -> dict:
             "city": data.get("city"),
             "linkedin": data.get("linkedin"),
         }
-        out_path = str(
-            Path(settings.files_dir) / str(app.user_id) / "tailored" / f"{app.id}.pdf"
-        )
-        try:
-            cv_render.render_cv_pdf(result["cv"], contact, out_path)
-            app.tailored_cv_path = out_path
-        except Exception:  # noqa: BLE001 - keep text output even if PDF fails
-            logger.exception("PDF render failed for application %s", app.id)
+        out_dir = Path(settings.files_dir) / str(app.user_id) / "tailored"
 
-        app.cover_letter = result["cover_letter"] or None
-        app.keyword_coverage = result["keyword_coverage"]
+        if make_cv and result["cv"] is not None:
+            cv_path = str(out_dir / f"{app.id}.pdf")
+            try:
+                cv_render.render_cv_pdf(result["cv"], contact, cv_path)
+                app.tailored_cv_path = cv_path
+            except Exception:  # noqa: BLE001 - keep text output even if PDF fails
+                logger.exception("CV PDF render failed for application %s", app.id)
+            app.keyword_coverage = result["keyword_coverage"]
+
+        if make_letter and result["cover_letter"]:
+            app.cover_letter = result["cover_letter"]
+            letter_path = str(out_dir / f"{app.id}_cover_letter.pdf")
+            try:
+                cv_render.render_letter_pdf(result["cover_letter"], contact, letter_path)
+                app.cover_letter_path = letter_path
+            except Exception:  # noqa: BLE001
+                logger.exception("letter PDF render failed for application %s", app.id)
+
         if app.status == ApplicationStatus.discovered:
-            app.status = ApplicationStatus.drafting
+            app.status = ApplicationStatus.ready
         session.add(
             ApplicationEvent(
                 application_id=app.id,
                 type="tailored",
                 payload={
+                    "cv": make_cv,
+                    "cover_letter": make_letter,
                     "used_llm": result["used_llm"],
                     "keyword_coverage": result["keyword_coverage"],
                 },
@@ -122,14 +118,52 @@ async def _tailor(app_id: uuid.UUID) -> dict:
         )
         await session.commit()
 
-        from app.services.notify import notify_user
-
-        await notify_user(
-            session,
-            app.user_id,
-            f"📝 Tailored CV{' + cover letter' if app.cover_letter else ''} ready: "
-            f"{job.title}" + (f" at {job.company}" if job.company else ""),
+        # Deliver the documents on Telegram: the user applies manually with them,
+        # then taps "I applied" to mark the application submitted.
+        from app.services.notify import (
+            chat_id_for_user,
+            send_telegram,
+            send_telegram_document,
         )
+
+        chat_id = await chat_id_for_user(session, app.user_id)
+        if chat_id:
+            title = job.title + (f" at {job.company}" if job.company else "")
+            if app.tailored_cv_path and make_cv:
+                await send_telegram_document(
+                    chat_id,
+                    app.tailored_cv_path,
+                    filename=_doc_name("CV", job),
+                    caption=f"📄 Tailored CV — {title}",
+                )
+            if app.cover_letter_path and make_letter:
+                await send_telegram_document(
+                    chat_id,
+                    app.cover_letter_path,
+                    filename=_doc_name("Cover_Letter", job),
+                    caption=f"✉️ Cover letter — {title}",
+                )
+            done = []
+            if make_cv:
+                done.append("CV")
+            if make_letter:
+                done.append("cover letter")
+            await send_telegram(
+                chat_id,
+                f"✅ {' + '.join(done)} ready for {title}.\n"
+                f"Apply here: {job.url}\n"
+                "When you've applied, tap the button and I'll track it.",
+                reply_markup={
+                    "inline_keyboard": [
+                        [
+                            {
+                                "text": "✅ I applied",
+                                "callback_data": f"applied:{app.id}",
+                            }
+                        ]
+                    ]
+                },
+            )
     return {
         "application_id": str(app_id),
         "used_llm": result["used_llm"],
@@ -138,12 +172,7 @@ async def _tailor(app_id: uuid.UUID) -> dict:
 
 
 @celery_app.task(name="tailor.run")
-def tailor_application(app_id: str, then_prefill: bool = False) -> dict:
-    result = asyncio.run(_tailor(uuid.UUID(app_id)))
-    # Auto-apply chain: after tailoring, queue pre-fill on the browser worker
-    # (advances to ready_to_submit). The human still does the final submit.
-    if then_prefill:
-        from app.tasks.prefill import prefill_application
-
-        prefill_application.apply_async(args=[app_id], queue="browser")
-    return result
+def tailor_application(
+    app_id: str, make_cv: bool = True, make_letter: bool = True
+) -> dict:
+    return asyncio.run(_tailor(uuid.UUID(app_id), make_cv, make_letter))

@@ -160,19 +160,28 @@ def build_applicant(field: str | None, data: dict, cv_parsed: dict | None) -> di
     return applicant
 
 
-async def tailor(applicant: dict, job: dict, *, want_cover_letter: bool = True) -> dict:
-    """Return {cv, cover_letter, keyword_coverage, used_llm}. The cover letter is
-    generated only when `want_cover_letter` (e.g. the form actually has one)."""
+async def tailor(
+    applicant: dict,
+    job: dict,
+    *,
+    want_cv: bool = True,
+    want_cover_letter: bool = True,
+) -> dict:
+    """Return {cv, cover_letter, keyword_coverage, used_llm}. Only what was asked
+    for is generated (the user picks CV / letter / both per job on Telegram);
+    `cv` and `keyword_coverage` are None on a letter-only run."""
     result = await llm.tailor_with_llm(
-        applicant, job, want_cover_letter=want_cover_letter
+        applicant, job, want_cv=want_cv, want_cover_letter=want_cover_letter
     )
     used_llm = result is not None
     if not result:
         result = _deterministic(applicant, job)
     cover_letter = result.pop("cover_letter", "") if want_cover_letter else ""
-    cv = _normalize_cv(result)
-    job_text = f"{job.get('title','')} {job.get('description','')}"
-    coverage = keyword_coverage(job_text, _cv_to_text(cv, cover_letter))
+    cv = _normalize_cv(result) if want_cv else None
+    coverage = None
+    if cv is not None:
+        job_text = f"{job.get('title','')} {job.get('description','')}"
+        coverage = keyword_coverage(job_text, _cv_to_text(cv, cover_letter))
     return {
         "cv": cv,
         "cover_letter": cover_letter,

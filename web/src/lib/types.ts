@@ -1,36 +1,27 @@
 export type ApplicationStatus =
   | "discovered"
-  | "drafting"
-  | "needs_attention"
-  | "ready_to_submit"
+  | "ready"
   | "submitted"
   | "interview"
   | "offer"
-  | "rejected"
-  | "withdrawn";
+  | "rejected";
 
 export const STATUSES: ApplicationStatus[] = [
   "discovered",
-  "drafting",
-  "needs_attention",
-  "ready_to_submit",
+  "ready",
   "submitted",
   "interview",
   "offer",
   "rejected",
-  "withdrawn",
 ];
 
 export const STATUS_LABELS: Record<ApplicationStatus, string> = {
   discovered: "Discovered",
-  drafting: "Drafting",
-  needs_attention: "Needs Fixes",
-  ready_to_submit: "Ready",
+  ready: "Docs ready",
   submitted: "Submitted",
   interview: "Interview",
   offer: "Offer",
   rejected: "Rejected",
-  withdrawn: "Withdrawn",
 };
 
 export interface User {
@@ -62,7 +53,6 @@ export interface Application {
   job: Job;
   cv_version_id: string | null;
   keyword_coverage: number | null;
-  needs_credentials: boolean;
   submitted_at: string | null;
   created_at: string;
   updated_at: string;
@@ -75,12 +65,10 @@ export interface ApplicationEvent {
 }
 
 export interface ApplicationDetail extends Application {
+  job: Job & { description: string | null };
   cover_letter: string | null;
   has_tailored_cv: boolean;
-  prefilled_answers: Record<string, string>;
-  missing_fields: string[];
-  ai_suggested_fields: string[];
-  has_screenshot: boolean;
+  has_cover_letter_pdf: boolean;
   events: ApplicationEvent[];
 }
 
@@ -107,8 +95,6 @@ export interface NotificationSettings {
 
 export interface DiscoveryPrefs {
   ksa_only: boolean;
-  auto_apply_enabled: boolean;
-  auto_apply_threshold: number;
 }
 
 export interface JobMatch {

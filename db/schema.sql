@@ -5,8 +5,7 @@ CREATE EXTENSION IF NOT EXISTS vector;        -- pgvector
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 
 CREATE TYPE application_status AS ENUM (
-    'discovered', 'drafting', 'ready_to_submit',
-    'submitted', 'interview', 'offer', 'rejected', 'withdrawn'
+    'discovered', 'ready', 'submitted', 'interview', 'offer', 'rejected'
 );
 
 -- Users (built for ~3; first one seeded from env as admin). Registration closed.
@@ -54,9 +53,9 @@ CREATE TABLE saved_searches (
     last_run_at TIMESTAMPTZ
 );
 
--- Per-user, per-tenant ATS logins (the user's OWN account on each employer's
--- Workday/SuccessFactors/Taleo). secret = Fernet ciphertext, never returned by
--- the API. Used by the prefill task to sign in and save a draft application.
+-- Per-user encrypted secrets. Today: the LinkedIn session cookie (host
+-- linkedin.com), used to resolve a posting's real employer apply link.
+-- secret = Fernet ciphertext, never returned by the API.
 CREATE TABLE portal_credentials (
     id          UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id     UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
@@ -104,13 +103,10 @@ CREATE TABLE applications (
     job_id            UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
     cv_version_id     UUID REFERENCES cv_versions(id) ON DELETE SET NULL,
     status            application_status NOT NULL DEFAULT 'discovered',
-    tailored_cv_path  TEXT,
-    cover_letter      TEXT,
-    prefilled_answers JSONB NOT NULL DEFAULT '{}'::jsonb,
-    missing_fields    JSONB NOT NULL DEFAULT '[]'::jsonb,  -- fields the human must complete
-    needs_credentials BOOLEAN NOT NULL DEFAULT false,      -- portal login required but not stored
+    tailored_cv_path  TEXT,                                -- tailored CV PDF
+    cover_letter      TEXT,                                -- cover letter text
+    cover_letter_path TEXT,                                -- cover letter PDF
     keyword_coverage  DOUBLE PRECISION,
-    screenshot_path   TEXT,
     submitted_at      TIMESTAMPTZ,
     notes             TEXT,
     created_at        TIMESTAMPTZ NOT NULL DEFAULT now(),

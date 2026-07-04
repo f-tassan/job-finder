@@ -21,17 +21,10 @@ function Column({
   onDelete: (id: string) => void;
 }) {
   const { setNodeRef, isOver } = useDroppable({ id: status });
-  const attention = status === "needs_attention";
   return (
     <div className="flex w-64 shrink-0 flex-col">
       <div className="mb-2 flex items-center justify-between px-1">
-        <span
-          className={
-            "text-xs font-semibold uppercase tracking-wide " +
-            (attention ? "text-amber-300" : "text-slate-400")
-          }
-        >
-          {attention && "⚠ "}
+        <span className="text-xs font-semibold uppercase tracking-wide text-slate-400">
           {STATUS_LABELS[status]}
         </span>
         <span className="text-xs text-slate-400">{apps.length}</span>
@@ -40,11 +33,7 @@ function Column({
         ref={setNodeRef}
         className={
           "flex min-h-[120px] flex-col gap-2 rounded-xl border border-dashed p-2 " +
-          (isOver
-            ? "border-indigo-500 bg-slate-800"
-            : attention
-              ? "border-amber-700/50"
-              : "border-slate-800")
+          (isOver ? "border-indigo-500 bg-slate-800" : "border-slate-800")
         }
       >
         {apps.map((a) => (

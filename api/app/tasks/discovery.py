@@ -140,8 +140,10 @@ async def _embed_new_jobs(session: AsyncSession, report=None) -> int:
 
 async def _match_user(
     session: AsyncSession, user: AppUser, jobs: list[Job], report=None
-) -> tuple[int, list[str], list[str]]:
-    """Returns (matched, auto_tracked_titles, auto_prepare_app_ids).
+) -> tuple[int, list[tuple[str, Job, float]]]:
+    """Returns (matched, auto_tracked) where auto_tracked is a list of
+    (application_id, job, score) for newly tracked high matches — the caller
+    messages each one to the user on Telegram with action buttons.
 
     `report(frac, detail)` (0..1 within this user's progress slice) is called at
     the slow points (cosine sweep, LLM re-rank) so the bar keeps moving."""
@@ -156,19 +158,15 @@ async def _match_user(
         )
     ).scalar_one_or_none()
     if bank is None:
-        return 0, [], []
+        return 0, []
     ptext = embeddings.profile_text(bank.field, bank.data or {})
     if not ptext.strip():
-        return 0, [], []
+        return 0, []
     pemb = embeddings.embed(ptext)
     bank.embedding = pemb
 
     prefs = bank.prefs or {}
     ksa_only = prefs.get("ksa_only", True)
-    auto_enabled = prefs.get("auto_apply_enabled", False)
-    auto_threshold = float(
-        prefs.get("auto_apply_threshold", settings.auto_apply_threshold_default)
-    )
 
     filter_sets = [
         s.filters or {}
@@ -243,8 +241,7 @@ async def _match_user(
 
     step(0.85, "saving matches")
     matched = 0
-    auto_tracked: list[str] = []
-    auto_prepare: list[str] = []
+    auto_tracked: list[tuple[str, Job, float]] = []
     for job, cos in candidates:
         score = (llm_scores or {}).get(str(job.id), cos)
         session.add(
@@ -252,9 +249,7 @@ async def _match_user(
         )
         matched += 1
 
-        should_track = score >= settings.auto_track_threshold
-        should_autoapply = auto_enabled and score >= auto_threshold
-        if not (should_track or should_autoapply):
+        if score < settings.auto_track_threshold:
             continue
 
         app = (
@@ -279,20 +274,9 @@ async def _match_user(
                     payload={"auto": True, "relevance_score": round(score, 4)},
                 )
             )
-            auto_tracked.append(job.title)
-
-        # Auto-apply: prepare (tailor -> pre-fill) high-scoring, not-yet-started apps.
-        if should_autoapply and app.status == ApplicationStatus.discovered:
-            session.add(
-                ApplicationEvent(
-                    application_id=app.id,
-                    type="auto_apply_queued",
-                    payload={"relevance_score": round(score, 4)},
-                )
-            )
-            auto_prepare.append(str(app.id))
+            auto_tracked.append((str(app.id), job, score))
     await session.commit()
-    return matched, auto_tracked, auto_prepare
+    return matched, auto_tracked
 
 
 async def _run_discovery(progress=None) -> dict:
@@ -324,8 +308,8 @@ async def _run_discovery(progress=None) -> dict:
         )
         users = (await session.execute(select(AppUser))).scalars().all()
         total_matches = 0
-        total_auto_prepared = 0
-        from app.services.notify import notify_user
+        from app.bot import format_job_html, job_buttons
+        from app.services.notify import chat_id_for_user, send_telegram
 
         n_users = max(len(users), 1)
         for ui, user in enumerate(users):
@@ -336,41 +320,38 @@ async def _run_discovery(progress=None) -> dict:
                 emit("Ranking matches", lo + (hi - lo) * frac, detail or email)
 
             _report(0.0)
-            matched, auto_tracked, auto_prepare = await _match_user(
+            matched, auto_tracked = await _match_user(
                 session, user, jobs, report=_report
             )
             total_matches += matched
-            # Auto-apply: pre-fill only (-> ready_to_submit). We deliberately do
-            # NOT auto-tailor the CV/cover letter here — that's an LLM token cost
-            # the user opts into per-application via the "Tailor" button. Pre-fill
-            # attaches the user's default CV; the human still does the final submit.
-            from app.services.throttle import on_cooldown
-            from app.tasks.prefill import prefill_application
-
-            queued = 0
-            for app_id in auto_prepare:
-                # Don't double-queue a prefill for the same app across back-to-back
-                # discovery runs (Beat + a manual trigger, or an acks_late redelivery)
-                # before the first prefill has run and moved it out of `discovered`.
-                if on_cooldown(f"autoprefill:{app_id}", seconds=6 * 3600):
-                    continue
-                prefill_application.apply_async(args=[app_id], queue="browser")
-                queued += 1
-            total_auto_prepared += queued
-            if auto_tracked:
-                preview = "; ".join(auto_tracked[:3])
-                more = (
-                    f" (+{len(auto_tracked) - 3} more)"
-                    if len(auto_tracked) > 3
-                    else ""
+            if not auto_tracked:
+                continue
+            # Each new high match goes to Telegram as its own card with action
+            # buttons (tailor CV / letter, mark applied, skip) — the chat is the
+            # primary place to act on jobs. Capped per run to avoid flooding;
+            # the rest are one summary line (they're all in the web feed).
+            chat_id = await chat_id_for_user(session, user.id)
+            if not chat_id:
+                continue
+            cap = settings.telegram_jobs_per_run
+            await send_telegram(
+                chat_id,
+                f"🔎 {len(auto_tracked)} new strong match(es) for you:",
+            )
+            for app_id, job, score in auto_tracked[:cap]:
+                await send_telegram(
+                    chat_id,
+                    format_job_html(job, score),
+                    parse_mode="HTML",
+                    reply_markup=job_buttons(
+                        app_id, linkedin="linkedin" in (job.source or "")
+                    ),
                 )
-                extra = (
-                    f" · auto-preparing {len(auto_prepare)}" if auto_prepare else ""
-                )
-                await notify_user(
-                    session,
-                    user.id,
-                    f"🔎 {len(auto_tracked)} new high-match job(s): {preview}{more}{extra}",
+            if len(auto_tracked) > cap:
+                await send_telegram(
+                    chat_id,
+                    f"…and {len(auto_tracked) - cap} more — see the Jobs feed, "
+                    "or send /jobs for the next batch.",
                 )
     summary = {
         "searches": n_searches,
@@ -379,7 +360,6 @@ async def _run_discovery(progress=None) -> dict:
         "jobs_total": len(jobs),
         "users": len(users),
         "matches": total_matches,
-        "auto_prepared": total_auto_prepared,
     }
     logger.info("discovery complete: %s", summary)
     if progress:

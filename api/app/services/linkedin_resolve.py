@@ -2,20 +2,19 @@
 
 LinkedIn jobs come in two flavors:
 
-  * **Easy Apply** — the form lives on linkedin.com. We never automate this: per
-    CLAUDE.md's hard rule, auto-submitting on LinkedIn risks a permanent ban.
-    Resolution returns kind ``"easyapply"`` and no URL.
+  * **Easy Apply** — the form lives on linkedin.com; the user applies there
+    themselves. Resolution returns kind ``"easyapply"`` and no URL.
   * **Offsite apply** — "Apply" bounces the candidate to the employer's own ATS
     (Greenhouse / Lever / Workday / SuccessFactors / Oracle / a careers page).
-    That destination is **not** linkedin.com, so the existing appliers can
-    pre-fill it and — only on the user's explicit trigger — submit it. Resolution
-    returns kind ``"offsite"`` and the external ``companyApplyUrl``.
+    Resolving it hands the user a direct link to the employer's real form (the
+    🔗 button on Telegram job messages), skipping the LinkedIn login-wall.
+    Resolution returns kind ``"offsite"`` and the external ``companyApplyUrl``.
 
 The external URL is only exposed to a logged-in member, so resolution needs the
 user's own LinkedIn cookie (``li_at`` + ``JSESSIONID``), stored as a
-``PortalCredential`` under host ``linkedin.com`` (the user pastes it once, like
-any other portal login). Reading the apply URL with the user's own session is
-*discovery*, not automation **on** LinkedIn — we still never submit there.
+``PortalCredential`` under host ``linkedin.com`` (the user pastes it once in
+Settings). Reading the apply URL with the user's own session is *discovery*,
+not automation **on** LinkedIn — we never act there.
 
 The resolved URL is cached on ``job.raw["apply_url"]`` so we resolve each posting
 at most once.
@@ -205,20 +204,17 @@ async def resolve_apply_target(
 
 
 _EASYAPPLY_NOTE = (
-    "⚠ This is a LinkedIn Easy Apply posting — the form is on LinkedIn, which we "
-    "never auto-submit (it risks a permanent ban). Open it on LinkedIn and submit "
-    "there yourself; your answers and CV are ready to paste."
+    "⚠ This is a LinkedIn Easy Apply posting — the form lives on LinkedIn. Open "
+    "the posting and apply there, then tap “✅ I applied”."
 )
 _NO_COOKIE_NOTE = (
-    "⚠ To auto-apply to LinkedIn redirect jobs, save your LinkedIn session cookie "
-    "under Settings → Credentials (host linkedin.com). Without it we can't read "
-    "the company application link LinkedIn hides behind its login."
+    "⚠ To get direct employer apply links for LinkedIn jobs, save your LinkedIn "
+    "session cookie in Settings → LinkedIn session cookie. Without it LinkedIn "
+    "hides the company application link behind its login."
 )
 _AUTH_NOTE = (
-    "🔐 Your LinkedIn session cookie has expired — LinkedIn redirect jobs can't be "
-    "auto-applied until you refresh it. Open Settings → Employer portal logins, "
-    "edit the linkedin.com entry, and paste a fresh cookie (copy it from your "
-    "browser the same way as before)."
+    "🔐 Your LinkedIn session cookie has expired — refresh it in Settings → "
+    "LinkedIn session cookie (copy it from your browser the same way as before)."
 )
 _NO_ID_NOTE = "⚠ Couldn't read a LinkedIn job id from this posting to resolve its apply link."
 _OFFSITE_NO_URL_NOTE = (
@@ -226,6 +222,6 @@ _OFFSITE_NO_URL_NOTE = (
     "URL. Open the posting and click Apply to continue on the employer's site."
 )
 _UNRESOLVED_NOTE = (
-    "⚠ Couldn't resolve this LinkedIn posting's application link (the saved cookie "
-    "may have expired). Re-save your LinkedIn cookie, or apply on LinkedIn directly."
+    "⚠ Couldn't resolve this posting's application link (the saved cookie may "
+    "have expired). Re-save your LinkedIn cookie, or apply via the posting link."
 )

@@ -4,7 +4,6 @@ import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
 import { LinkedInCookieCard } from "@/components/LinkedInCookieCard";
-import { PortalCredentialsCard } from "@/components/PortalCredentialsCard";
 import { apiGet, apiSend } from "@/lib/api";
 import type { DiscoveryPrefs, NotificationSettings } from "@/lib/types";
 
@@ -13,8 +12,6 @@ export default function SettingsPage() {
   const [chatId, setChatId] = useState("");
   const [enabled, setEnabled] = useState(true);
   const [ksaOnly, setKsaOnly] = useState(true);
-  const [autoApply, setAutoApply] = useState(false);
-  const [autoThreshold, setAutoThreshold] = useState(60);
   const [msg, setMsg] = useState<string | null>(null);
   const [dmsg, setDmsg] = useState<string | null>(null);
 
@@ -38,8 +35,6 @@ export default function SettingsPage() {
   useEffect(() => {
     if (disc.data) {
       setKsaOnly(disc.data.ksa_only);
-      setAutoApply(disc.data.auto_apply_enabled);
-      setAutoThreshold(Math.round(disc.data.auto_apply_threshold * 100));
     }
   }, [disc.data]);
 
@@ -47,8 +42,6 @@ export default function SettingsPage() {
     mutationFn: () =>
       apiSend("/settings/discovery", "PUT", {
         ksa_only: ksaOnly,
-        auto_apply_enabled: autoApply,
-        auto_apply_threshold: autoThreshold / 100,
       }),
     onSuccess: () => {
       qc.invalidateQueries({ queryKey: ["discovery-prefs"] });
@@ -89,10 +82,12 @@ export default function SettingsPage() {
       ) : (
         <div className="max-w-2xl space-y-5 rounded-xl border border-slate-800 bg-slate-900 p-6">
           <div>
-            <h2 className="text-sm font-semibold">Telegram notifications</h2>
+            <h2 className="text-sm font-semibold">Telegram</h2>
             <p className="mt-1 text-xs text-slate-400">
-              Get a push when discovery finds high matches and when tailoring /
-              pre-fill / submission happen. Server bot token is{" "}
+              Telegram is where the action happens: new matches arrive there
+              with buttons to generate a tailored CV / cover letter (sent back
+              as PDFs) and to mark a job as applied. Message the bot /start to
+              see your chat id. Server bot token is{" "}
               {data?.telegram_configured ? (
                 <span className="text-green-400">configured</span>
               ) : (
@@ -148,7 +143,7 @@ export default function SettingsPage() {
       {!disc.isLoading && (
         <div className="mt-4 max-w-2xl space-y-5 rounded-xl border border-slate-800 bg-slate-900 p-6">
           <div>
-            <h2 className="text-sm font-semibold">Discovery &amp; auto-apply</h2>
+            <h2 className="text-sm font-semibold">Discovery</h2>
             <p className="mt-1 text-xs text-slate-400">
               Controls how jobs are matched for you. Re-run discovery after saving.
             </p>
@@ -162,39 +157,6 @@ export default function SettingsPage() {
             />
             Only show jobs in Saudi Arabia (or remote-KSA)
           </label>
-
-          <div className="border-t border-slate-800 pt-4">
-            <label className="flex items-center gap-2 text-sm font-medium">
-              <input
-                type="checkbox"
-                checked={autoApply}
-                onChange={(e) => setAutoApply(e.target.checked)}
-              />
-              Auto-apply to strong matches
-            </label>
-            <p className="mt-1 text-xs text-slate-400">
-              When a job scores at or above the threshold, the app automatically
-              tailors the CV + cover letter and pre-fills the form, leaving it{" "}
-              <span className="text-slate-300">ready to submit</span>. It does{" "}
-              <span className="text-amber-300">not</span> submit for you — you do the
-              final click (safety / anti-ban rule).
-            </p>
-            <div className="mt-3 flex items-center gap-3">
-              <input
-                type="range"
-                min={30}
-                max={95}
-                step={1}
-                value={autoThreshold}
-                onChange={(e) => setAutoThreshold(Number(e.target.value))}
-                disabled={!autoApply}
-                className="w-64"
-              />
-              <span className="text-sm text-indigo-300">
-                threshold {autoThreshold}%
-              </span>
-            </div>
-          </div>
 
           <div className="flex items-center gap-3">
             <button
@@ -210,8 +172,6 @@ export default function SettingsPage() {
       )}
 
       <LinkedInCookieCard />
-
-      <PortalCredentialsCard />
     </AppShell>
   );
 }

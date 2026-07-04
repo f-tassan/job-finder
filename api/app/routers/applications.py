@@ -24,11 +24,11 @@ from app.models import (
     Job,
 )
 from app.schemas import (
-    AnswersUpdate,
     ApplicationCreate,
     ApplicationDetailOut,
     ApplicationOut,
     ApplicationUpdate,
+    TailorRequest,
 )
 
 router = APIRouter(prefix="/applications", tags=["applications"])
@@ -150,119 +150,24 @@ async def update_application(
 @router.post("/{app_id}/tailor", status_code=status.HTTP_202_ACCEPTED)
 async def tailor_application(
     app_id: uuid.UUID,
+    body: TailorRequest | None = None,
     user: AppUser = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> dict:
-    """Enqueue tailoring (ATS CV + cover letter) for this application."""
+    """Enqueue document generation for this application: the tailored CV, the
+    cover letter, or both. The PDFs land here (job page) and on Telegram."""
     await _owned(session, user.id, app_id)
-    from app.tasks.tailor import tailor_application as task
-
-    result = task.delay(str(app_id))
-    return {"task_id": result.id, "status": "queued"}
-
-
-@router.post("/{app_id}/prefill", status_code=status.HTTP_202_ACCEPTED)
-async def prefill_application(
-    app_id: uuid.UUID,
-    user: AppUser = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    """Enqueue form pre-fill on the browser-worker (fills known fields, flags gaps)."""
-    await _owned(session, user.id, app_id)
-    from app.tasks.prefill import prefill_application as task
-
-    result = task.apply_async(args=[str(app_id)], queue="browser")
-    return {"task_id": result.id, "status": "queued"}
-
-
-@router.patch("/{app_id}/answers", response_model=ApplicationDetailOut)
-async def update_answers(
-    app_id: uuid.UUID,
-    body: AnswersUpdate,
-    user: AppUser = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> Application:
-    """User completes the gaps left at review."""
-    app = await _owned(session, user.id, app_id)
-    app.prefilled_answers = body.prefilled_answers
-    await session.commit()
-    return await _owned(session, user.id, app_id, with_events=True)
-
-
-@router.post("/{app_id}/submit", response_model=ApplicationDetailOut)
-async def submit_application(
-    app_id: uuid.UUID,
-    user: AppUser = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> Application:
-    """Mark the application submitted (the human performs the actual submit)."""
-    app = await _owned(session, user.id, app_id)
-    app.status = ApplicationStatus.submitted
-    if app.submitted_at is None:
-        app.submitted_at = datetime.now(timezone.utc)
-    session.add(
-        ApplicationEvent(application_id=app.id, type="submitted", payload={})
-    )
-    await session.commit()
-
-    from app.services.notify import notify_user
-
-    job = await session.get(Job, app.job_id)
-    await notify_user(
-        session,
-        user.id,
-        f"📨 Submitted: {job.title}" + (f" at {job.company}" if job.company else ""),
-    )
-    return await _owned(session, user.id, app_id, with_events=True)
-
-
-@router.post("/{app_id}/auto-submit", status_code=status.HTTP_202_ACCEPTED)
-async def auto_submit_application(
-    app_id: uuid.UUID,
-    user: AppUser = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> dict:
-    """Explicitly fill AND submit the form on the browser-worker. Allowed only for
-    standalone ATS forms (never LinkedIn/Bayt); the worker refuses blocked hosts.
-    This is a deliberate, user-initiated finalize — not part of auto-apply."""
-    app = await _owned(session, user.id, app_id)
-    job = await session.get(Job, app.job_id)
-    url = (job.url or "").lower()
-    if "bayt.com" in url:
+    make_cv = body.cv if body else True
+    make_letter = body.cover_letter if body else True
+    if not (make_cv or make_letter):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auto-submit is disabled for Bayt — submit there yourself.",
+            detail="Pick at least one of cv / cover_letter",
         )
-    # LinkedIn is allowed ONLY when it resolved to an external company form
-    # (apply_kind == "offsite"); Easy Apply and not-yet-resolved jobs stay blocked.
-    if "linkedin.com" in url and job.apply_kind != "offsite":
-        if job.apply_kind == "easyapply":
-            detail = "Easy Apply lives on LinkedIn — submit it there yourself."
-        else:
-            detail = (
-                "This LinkedIn job hasn't resolved to an external apply form yet — "
-                "your LinkedIn cookie may be expired. Refresh it in Settings → "
-                "Employer portal logins, then re-run Pre-fill."
-            )
-        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
-    from app.tasks.submit import submit_application as task
+    from app.tasks.tailor import tailor_application as task
 
-    result = task.apply_async(args=[str(app_id)], queue="browser")
+    result = task.delay(str(app_id), make_cv, make_letter)
     return {"task_id": result.id, "status": "queued"}
-
-
-@router.get("/{app_id}/screenshot")
-async def get_screenshot(
-    app_id: uuid.UUID,
-    user: AppUser = Depends(current_user),
-    session: AsyncSession = Depends(get_session),
-) -> FileResponse:
-    app = await _owned(session, user.id, app_id)
-    if not app.screenshot_path:
-        raise HTTPException(
-            status_code=status.HTTP_404_NOT_FOUND, detail="No screenshot yet"
-        )
-    return FileResponse(app.screenshot_path, media_type="image/png")
 
 
 @router.get("/{app_id}/cv")
@@ -277,6 +182,20 @@ async def download_tailored_cv(
             status_code=status.HTTP_404_NOT_FOUND, detail="No tailored CV yet"
         )
     return FileResponse(app.tailored_cv_path, filename="tailored_cv.pdf")
+
+
+@router.get("/{app_id}/cover-letter")
+async def download_cover_letter(
+    app_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    app = await _owned(session, user.id, app_id)
+    if not app.cover_letter_path:
+        raise HTTPException(
+            status_code=status.HTTP_404_NOT_FOUND, detail="No cover letter PDF yet"
+        )
+    return FileResponse(app.cover_letter_path, filename="cover_letter.pdf")
 
 
 @router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT)

@@ -95,3 +95,39 @@ def render_cv_pdf(cv: dict, contact: dict, out_path: str) -> str:
     Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     HTML(string=build_html(cv, contact)).write_pdf(out_path)
     return out_path
+
+
+def build_letter_html(letter_text: str, contact: dict) -> str:
+    """A plain, ATS-safe cover-letter page: name + contact line, then the letter
+    text as paragraphs (blank lines split paragraphs)."""
+    name = _esc(contact.get("full_name_en") or contact.get("name") or "Candidate")
+    bits = [
+        contact.get("email"),
+        contact.get("phone"),
+        contact.get("city"),
+        contact.get("linkedin"),
+    ]
+    contact_line = " · ".join(_esc(b) for b in bits if b)
+
+    parts: list[str] = [f"<h1>{name}</h1>"]
+    if contact_line:
+        parts.append(f'<div class="contact">{contact_line}</div>')
+    for para in (letter_text or "").split("\n\n"):
+        para = para.strip()
+        if para:
+            parts.append(f"<p>{_esc(para).replace(chr(10), '<br>')}</p>")
+
+    return (
+        f"<!doctype html><html><head><meta charset='utf-8'>"
+        f"<style>{_CSS} p {{ margin: 10px 0; }}</style></head>"
+        f"<body>{''.join(parts)}</body></html>"
+    )
+
+
+def render_letter_pdf(letter_text: str, contact: dict, out_path: str) -> str:
+    """Render the cover letter to a PDF at out_path and return the path."""
+    from weasyprint import HTML  # lazy: needs native libs
+
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+    HTML(string=build_letter_html(letter_text, contact)).write_pdf(out_path)
+    return out_path

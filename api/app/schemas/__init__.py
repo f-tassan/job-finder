@@ -80,6 +80,13 @@ class JobOut(BaseModel):
     apply_url: str | None = None
 
 
+class JobDetailOut(JobOut):
+    """Adds the extracted posting text — shown on the application page so the
+    user can read the job without opening the original posting."""
+
+    description: str | None = None
+
+
 # --- Applications ---
 class ApplicationCreate(BaseModel):
     """Manual add: creates a `manual` job row then the application."""
@@ -116,24 +123,24 @@ class ApplicationOut(BaseModel):
     job: JobOut
     cv_version_id: uuid.UUID | None = None
     keyword_coverage: float | None = None
-    needs_credentials: bool = False
     submitted_at: datetime | None = None
     created_at: datetime
     updated_at: datetime
 
 
 class ApplicationDetailOut(ApplicationOut):
+    job: JobDetailOut  # includes the extracted posting text
     cover_letter: str | None = None
     has_tailored_cv: bool = False
-    prefilled_answers: dict[str, Any] = {}
-    missing_fields: list[Any] = []
-    ai_suggested_fields: list[Any] = []
-    has_screenshot: bool = False
+    has_cover_letter_pdf: bool = False
     events: list[ApplicationEventOut] = []
 
 
-class AnswersUpdate(BaseModel):
-    prefilled_answers: dict[str, Any]
+class TailorRequest(BaseModel):
+    """Which documents to generate for this application."""
+
+    cv: bool = True
+    cover_letter: bool = True
 
 
 # --- Notification settings (Phase 5) ---
@@ -148,7 +155,7 @@ class NotificationSettingsUpdate(BaseModel):
     enabled: bool = True
 
 
-# --- Portal credentials (per-user, per-tenant ATS logins) ---
+# --- Stored credentials (today: the LinkedIn cookie for apply-link resolution) ---
 class PortalCredentialOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -169,17 +176,13 @@ class PortalCredentialUpsert(BaseModel):
     label: str | None = None
 
 
-# --- Discovery / auto-apply prefs ---
+# --- Discovery prefs ---
 class DiscoveryPrefsOut(BaseModel):
     ksa_only: bool = True
-    auto_apply_enabled: bool = False
-    auto_apply_threshold: float = 0.6
 
 
 class DiscoveryPrefsUpdate(BaseModel):
     ksa_only: bool = True
-    auto_apply_enabled: bool = False
-    auto_apply_threshold: float = Field(0.6, ge=0.0, le=1.0)
 
 
 # --- Saved searches (Phase 2) ---

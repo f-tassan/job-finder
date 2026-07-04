@@ -1,10 +1,9 @@
-"""Per-user, per-portal ATS credentials (encrypted at rest).
+"""Per-user encrypted secrets, keyed by host.
 
-Enterprise ATS accounts are per-employer-tenant (each company's Workday /
-SuccessFactors / Taleo is a separate site with its own login), so credentials
-are keyed by `host` (the tenant's domain). The password is stored as a Fernet
-ciphertext in `secret`; it is never returned by the API. Used by the prefill
-task to log into the user's own account and save a draft application.
+Today the only stored secret is the user's LinkedIn session cookie (host
+``linkedin.com``), which the resolver uses to read the real employer apply link
+behind a LinkedIn posting. The secret is a Fernet ciphertext; it is never
+returned by the API.
 """
 from __future__ import annotations
 

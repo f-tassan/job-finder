@@ -131,6 +131,48 @@ async def complete_json(
         return None
 
 
+async def complete_text(*, system: str, prompt: str, kind: str = "parse") -> str | None:
+    """Plain-text completion on the cheap model (Telegram chat assistant).
+    Returns None if no provider is configured or on error."""
+    provider = active_provider()
+    if provider is None:
+        return None
+    model = _model_for(provider, kind)
+    try:
+        if provider == "openai":
+            from openai import AsyncOpenAI
+
+            client = AsyncOpenAI(api_key=settings.openai_api_key)
+            try:
+                resp = await client.chat.completions.create(
+                    model=model,
+                    messages=[
+                        {"role": "system", "content": system},
+                        {"role": "user", "content": prompt},
+                    ],
+                    max_tokens=700,
+                )
+                return resp.choices[0].message.content
+            finally:
+                await client.close()
+        from anthropic import AsyncAnthropic
+
+        client = AsyncAnthropic(api_key=settings.anthropic_api_key)
+        try:
+            resp = await client.messages.create(
+                model=model,
+                max_tokens=700,
+                system=system,
+                messages=[{"role": "user", "content": prompt}],
+            )
+            return next((b.text for b in resp.content if b.type == "text"), None)
+        finally:
+            await client.close()
+    except Exception:  # noqa: BLE001 - never block the caller
+        logger.exception("LLM (%s) text call failed", provider)
+        return None
+
+
 async def _openai_json(model, system, prompt, schema) -> dict | None:
     from openai import AsyncOpenAI
 
@@ -229,110 +271,49 @@ async def rank_jobs(profile_text: str, jobs: list[dict]) -> dict[str, float] | N
     return out or None
 
 
-_FIELD_ANSWER_SCHEMA: dict = {
+_LETTER_SCHEMA: dict = {
     "type": "object",
     "additionalProperties": False,
-    "properties": {
-        "answers": {
-            "type": "array",
-            "items": {
-                "type": "object",
-                "additionalProperties": False,
-                "properties": {
-                    "id": {"type": "string"},
-                    "answer": {"type": "string"},
-                },
-                "required": ["id", "answer"],
-            },
-        }
-    },
-    "required": ["answers"],
+    "properties": {"cover_letter": {"type": "string"}},
+    "required": ["cover_letter"],
 }
-
-_FIELD_ANSWER_SYSTEM = (
-    "You fill job-application form fields for a candidate using the facts in the "
-    "provided answer bank. RULES:\n"
-    "- Never invent or assume qualifications, employers, titles, dates, numbers, or "
-    "experience that are not present in the answer-bank data.\n"
-    "- For FACTUAL fields, if the answer is not directly supported by the data, "
-    "return an empty string.\n"
-    "- For open-ended MOTIVATION / 'why this company/role' / cover-letter prompts, "
-    "you MAY compose a short, genuine answer (2-3 sentences) grounded in the "
-    "candidate's real background (their field, skills, and experience in the answer "
-    "bank) and the company/role named in the field's label — WITHOUT inventing any "
-    "facts, credentials, employers, or metrics.\n"
-    "- NEVER answer salary/compensation questions — return an empty string.\n"
-    "- When a field lists options, return EXACTLY one of the given option strings, "
-    "or an empty string if none genuinely fits.\n"
-    "- Keep factual answers concise; keep motivation answers brief and natural."
-)
-
-
-async def answer_form_fields(
-    profile: dict, fields: list[dict]
-) -> dict[str, str]:
-    """Answer unknown application-form fields strictly from the answer bank.
-
-    `fields` is a list of {"id", "label", "options"?(list[str])}. Returns
-    {id: answer}; an empty/whitespace answer means "not grounded — leave blank".
-    Returns {} if no LLM is configured or on error (caller leaves fields blank).
-    Used for pre-fill review only; the human verifies every value before submit.
-    """
-    if not fields or not available():
-        return {}
-    prompt = (
-        "ANSWER BANK (the only facts you may use):\n"
-        f"{json.dumps(profile, ensure_ascii=False)[:10000]}\n\n"
-        "FORM FIELDS to answer (each has an id, a label, and optionally a closed "
-        "set of options):\n"
-        f"{json.dumps(fields, ensure_ascii=False)[:6000]}\n\n"
-        "Return an answer for every field id. For factual fields, use an empty "
-        "string whenever the answer bank does not support an answer (never invent "
-        "facts). For motivation / 'why this company' / cover-letter prompts, compose "
-        "a short, genuine answer grounded in the candidate's background and the "
-        "role/company named in the field's label."
-    )
-    res = await complete_json(
-        system=_FIELD_ANSWER_SYSTEM,
-        prompt=prompt,
-        schema=_FIELD_ANSWER_SCHEMA,
-        kind="parse",
-    )
-    if not res:
-        return {}
-    out: dict[str, str] = {}
-    for a in res.get("answers", []):
-        try:
-            ans = str(a.get("answer", "")).strip()
-            if ans:
-                out[str(a["id"])] = ans
-        except (KeyError, TypeError, ValueError):
-            continue
-    return out
 
 
 async def tailor_with_llm(
-    applicant: dict, job: dict, *, want_cover_letter: bool = True
+    applicant: dict,
+    job: dict,
+    *,
+    want_cv: bool = True,
+    want_cover_letter: bool = True,
 ) -> dict | None:
-    """Tailored CV (+ cover letter only if `want_cover_letter`), constrained to
-    applicant facts. None if no key. Skipping the cover letter drops it from both
-    the prompt and the schema, so no tokens are spent generating it."""
+    """Tailored CV and/or cover letter, constrained to applicant facts. None if
+    no key. Whatever isn't wanted is dropped from both the prompt and the schema,
+    so a letter-only request doesn't pay for CV tokens and vice versa."""
+    if not (want_cv or want_cover_letter):
+        return None
     cover_clause = (
-        " and a short, natural cover letter (3 short paragraphs) addressed to the "
+        "a short, natural cover letter (3 short paragraphs) addressed to the "
         "hiring team"
         if want_cover_letter
         else ""
     )
+    cv_clause = (
+        "a tailored CV (summary, skills, experience with bullets, education, "
+        "certifications)"
+        if want_cv
+        else ""
+    )
+    ask = " and ".join(c for c in (cv_clause, cover_clause) if c)
     prompt = (
         "APPLICANT DATA (the only facts you may use):\n"
         f"{json.dumps(applicant, ensure_ascii=False)[:12000]}\n\n"
         "TARGET JOB:\n"
         f"{json.dumps(job, ensure_ascii=False)[:8000]}\n\n"
-        "Produce a tailored CV (summary, skills, experience with bullets, "
-        f"education, certifications){cover_clause}. Do not fabricate anything."
+        f"Produce {ask}. Do not fabricate anything."
     )
-    schema = TAILOR_SCHEMA
-    if not want_cover_letter:
+    if not want_cv:
+        schema = _LETTER_SCHEMA
+    elif not want_cover_letter:
         schema = {
             **TAILOR_SCHEMA,
             "properties": {
@@ -342,6 +323,8 @@ async def tailor_with_llm(
             },
             "required": [r for r in TAILOR_SCHEMA["required"] if r != "cover_letter"],
         }
+    else:
+        schema = TAILOR_SCHEMA
     return await complete_json(
         system=TAILOR_SYSTEM, prompt=prompt, schema=schema, kind="tailor"
     )

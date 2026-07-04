@@ -1,9 +1,9 @@
-"""Per-user portal credentials: the user's OWN logins to employer ATS sites.
+"""Per-user encrypted credential store.
 
-The user pre-creates an account on each company's Workday/SuccessFactors/Taleo
-and stores it here; the prefill task uses it to sign in and save a draft. The
-password is encrypted at rest (Fernet) and never returned by the API — list/get
-only ever expose host + username + label.
+Today its only use is the LinkedIn session cookie (host ``linkedin.com``), which
+the resolver needs to read the real employer apply link behind a LinkedIn
+posting's "Apply" button. The secret is encrypted at rest (Fernet) and never
+returned by the API — list/get only ever expose host + username + label.
 """
 from __future__ import annotations
 
@@ -17,7 +17,7 @@ from app.auth import current_user
 from app.db import get_session
 from app.models import AppUser, PortalCredential
 from app.schemas import PortalCredentialOut, PortalCredentialUpsert
-from app.services.credentials import tenant_key
+from app.services.ats_url import tenant_key
 from app.services.crypto import encrypt
 
 router = APIRouter(prefix="/credentials", tags=["credentials"])

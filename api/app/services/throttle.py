@@ -1,16 +1,13 @@
-"""Politeness / anti-throttling layer — make every automated touch look human so
-we never get rate-limited or banned for bot behaviour.
+"""Politeness / anti-throttling layer for DISCOVERY — make every automated read
+look human so we never get rate-limited or banned for bot behaviour.
 
-Three tools, all best-effort (never raise into the caller):
+Two tools, all best-effort (never raise into the caller):
 
 1. `pace_host(url)` — space out requests to a host. Backed by Redis so ALL
    workers cooperate: each call reserves the next "slot", at least a randomized
-   gap after the previous one, and sleeps until then. This is what stops us
-   hammering a single ATS (e.g. Rippling) across discovery / pre-fill / submit.
-2. `on_cooldown(key)` — a short per-application (or per-job) cooldown so the same
-   posting can't be hit again within a window (prevents rapid re-submits /
-   double applications / the retry-storm that triggers throttling).
-3. `new_human_context(browser)` + `LAUNCH_ARGS` — a realistic, non-headless-
+   gap after the previous one, and sleeps until then. Used by careers-page
+   rendering and the LinkedIn apply-link resolver.
+2. `new_human_context(browser)` + `LAUNCH_ARGS` — a realistic, non-headless-
    looking Playwright context (real UA, viewport, locale, timezone, webdriver
    masked) to reduce automation fingerprinting.
 """
@@ -88,23 +85,6 @@ async def pace_host(
         wait = random.uniform(0, jitter)
     if wait > 0:
         await asyncio.sleep(min(wait, max_wait))
-
-
-async def jitter_sleep(lo: float = 0.4, hi: float = 1.8) -> None:
-    """A short, human-ish random pause between in-page actions."""
-    await asyncio.sleep(random.uniform(lo, hi))
-
-
-def on_cooldown(key: str, *, seconds: int = 90) -> bool:
-    """True if `key` was used within the last `seconds` (and refreshes nothing);
-    False otherwise (and starts the cooldown). Used to stop the same application
-    being submitted/pre-filled again in quick succession. Fails open (returns
-    False) if Redis is down."""
-    try:
-        ok = _redis_client().set(f"cooldown:{key}", "1", nx=True, ex=seconds)
-        return not bool(ok)
-    except Exception:  # noqa: BLE001
-        return False
 
 
 # --- Human-like Playwright context -----------------------------------------

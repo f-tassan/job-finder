@@ -9,8 +9,8 @@ const HOST = "linkedin.com";
 
 // A dedicated, friendlier entry for the LinkedIn session cookie. It writes to the
 // same /credentials store (host linkedin.com) the resolver reads — pasting a
-// cookie here lets the app turn LinkedIn "redirect" postings into the employer's
-// real application form and pre-fill / auto-submit it. Easy Apply stays manual.
+// cookie here lets the app turn a LinkedIn posting's "Apply" redirect into the
+// employer's direct application link (the 🔗 button on Telegram job messages).
 export function LinkedInCookieCard() {
   const qc = useQueryClient();
   const [cookie, setCookie] = useState("");
@@ -39,7 +39,7 @@ export function LinkedInCookieCard() {
       qc.invalidateQueries({ queryKey: ["credentials"] });
       setCookie("");
       setErr(null);
-      setMsg("Saved — LinkedIn redirect jobs can now be auto-applied.");
+      setMsg("Saved — direct apply links can now be resolved.");
       setTimeout(() => setMsg(null), 5000);
     },
     onError: (e) =>
@@ -56,11 +56,11 @@ export function LinkedInCookieCard() {
       <div>
         <h2 className="text-sm font-semibold">LinkedIn session cookie</h2>
         <p className="mt-1 text-xs text-slate-400">
-          Lets the app open a LinkedIn posting, follow its{" "}
-          <span className="text-slate-300">&ldquo;Apply&rdquo; redirect</span> to the
-          employer&rsquo;s real application site, and pre-fill / submit it there.
-          LinkedIn hides that link behind its login, so it needs your own session.
-          We never submit <em>on</em> LinkedIn (Easy Apply stays manual). Stored
+          Lets the app follow a LinkedIn posting&rsquo;s{" "}
+          <span className="text-slate-300">&ldquo;Apply&rdquo; redirect</span> and
+          hand you the employer&rsquo;s direct application link (the 🔗 button on
+          Telegram). LinkedIn hides that link behind its login, so it needs your
+          own session. We never act <em>on</em> LinkedIn itself. Stored
           encrypted; the cookie is your login — keep it private.
         </p>
       </div>
@@ -84,7 +84,7 @@ export function LinkedInCookieCard() {
           </>
         ) : (
           <span className="rounded bg-amber-500/10 px-2 py-0.5 text-amber-400">
-            No cookie yet — LinkedIn redirect jobs can&rsquo;t be auto-applied
+            No cookie yet — direct apply links can&rsquo;t be resolved
           </span>
         )}
       </div>

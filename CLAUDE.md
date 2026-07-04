@@ -6,33 +6,46 @@
 ## 0. What we are building
 
 A private, **multi-user** (designed for ~3 users, seeded with one) system for the
-**Saudi Arabia** job market, for **Saudi nationals**, that:
+**Saudi Arabia** job market, for **Saudi nationals**. **Telegram-first**: the bot
+is where actions happen; the web app is for tracking, analysis, and history.
 
-1. **Discovers** relevant jobs from Saudi sources on a schedule.
-2. **Ranks** them per user (hard filters + semantic similarity to that user's profile).
-3. **Tailors** an ATS-safe CV + cover letter per job (natural, never fabricated).
-4. **Pre-fills** application forms from each user's "answer bank", leaving
-   unknown/sensitive fields (e.g. expected salary) **blank** for the human.
-5. Routes every application through a **review queue**; the human does the final submit.
-6. **Notifies** that user the moment something is submitted.
-7. Gives each user a **dashboard**: kanban of applications with editable status
-   (discovered → drafting → ready → submitted → interview → offer → rejected),
-   CV upload/versioning, and an answer-bank editor that includes their **field**.
+1. **Discovers** relevant jobs from Saudi sources on a schedule — the heart of
+   the product (LinkedIn especially, plus ATS boards, national portals, company
+   careers pages).
+2. **Ranks** them per user (hard filters + semantic similarity + LLM re-rank).
+3. **Sends** each strong match to that user on **Telegram** — title, company,
+   link — with **inline buttons**: 📄 CV · ✉️ Letter · 📄+✉️ Both · ✅ I applied ·
+   🙈 Skip (+ 🔗 Apply link on LinkedIn posts, resolved via the user's cookie).
+4. **Tailors on demand** (cheap model, gpt-4o-mini): an ATS-safe CV and/or cover
+   letter for that exact job, grounded in the user's answer bank — rendered to
+   PDFs, **sent back over Telegram** and saved on the job's web page.
+5. The user applies **manually** (opens the link, fills the form, uploads the
+   PDFs) — no auto-fill, no auto-submit, nothing to break or get banned for.
+6. **Marks submitted automatically**: one tap on “✅ I applied” in Telegram, or
+   hands-free via the IMAP watcher that spots “thank you for applying”
+   confirmation emails.
+7. Gives each user a **dashboard**: a small kanban (discovered → docs ready →
+   submitted → interview → offer / rejected), a page per job with the extracted
+   description + saved documents, CV upload/versioning, and the answer bank.
 
 Each user is fully isolated: their own profile, field, CVs, saved searches, matches,
 applications, and notifications. The job catalog itself is shared (deduplicated), but
 **relevance and applications are per user.**
 
 ### Hard design rules — read before writing code
-- **No fully-automatic submission, especially to LinkedIn.** LinkedIn's User Agreement
-  prohibits automated access and enforcement is aggressive; auto-submit risks a
-  permanent ban. Automate everything *up to* submission. LinkedIn & Bayt: discovery +
-  pre-fill only, the human submits. Standalone ATS forms (Greenhouse, Lever, Ashby,
-  Workday): pre-fill and finalize only on the user's confirmation.
+- **No automated form filling or submission anywhere.** (Pivoted 2026-07: the
+  per-ATS applier / pre-fill / browser-agent stack was removed — platform-by-
+  platform automation was too brittle to trust.) Automation stops at discovery
+  and document generation; the human applies. Playwright is used ONLY to read
+  JS careers pages during discovery, never to act on a form.
 - **Never invent qualifications** during tailoring — only data in that user's answer
   bank / parsed CV may be used.
-- Sensitive fields (expected/current salary, free-text "why this company") default to
-  **blank** until the user fills them at review.
+- **Keep generation cheap.** Documents are generated per job on a button tap, so
+  everything runs on the cheap model (gpt-4o-mini) unless there's a strong
+  reason not to.
+- The bot service is the ONLY getUpdates consumer, and every chat is bound to
+  one user (their telegram_chat_id setting) — a callback may only ever touch
+  that user's rows.
 
 ## 1. Tech stack (do not substitute without reason)
 
@@ -40,7 +53,8 @@ applications, and notifications. The job catalog itself is shared (deduplicated)
 |------------------|---------------------------------------------------------------------|
 | Backend API      | Python 3.12, **FastAPI**, Pydantic v2, SQLAlchemy 2.0 (async), Alembic |
 | Task queue       | **Celery** + Redis broker; **Celery Beat** for scheduling           |
-| Browser worker   | **Playwright (Python)** in its own container/queue                  |
+| Telegram bot     | Long-polling service (`app.bot`, httpx) — commands + inline buttons |
+| Browser worker   | **Playwright (Python)**, own container/queue — discovery rendering ONLY |
 | Database         | **PostgreSQL 16** + **pgvector**                                    |
 | Embeddings       | `sentence-transformers` (`all-MiniLM-L6-v2`, 384-dim, local & free); pluggable to Voyage |
 | LLM              | **OpenAI API** (`openai` Python SDK); pluggable to Anthropic Claude |
@@ -54,11 +68,12 @@ applications, and notifications. The job catalog itself is shared (deduplicated)
 
 ### LLM model routing (provider: **OpenAI** — the deployed default)
 This deployment runs on OpenAI (`LLM_PROVIDER=openai`, `OPENAI_API_KEY` set).
-- `gpt-4o-mini` (`OPENAI_PARSE_MODEL`) — cheap/high-volume: CV parsing, relevance
-  re-rank, form field-answering.
-- `gpt-4o` (`OPENAI_TAILOR_MODEL`) — quality: CV tailoring, cover letters.
-- `gpt-4.1` (`AGENT_APPLIER_MODEL`) — vision browser-agent (browser-use) that
-  fills & submits unknown/long-tail application forms on auto-submit.
+Everything runs on the cheap model — generation cost per document is the
+constraint, not maximum polish:
+- `gpt-4o-mini` (`OPENAI_PARSE_MODEL`) — CV parsing, relevance re-rank, the
+  Telegram chat assistant.
+- `gpt-4o-mini` (`OPENAI_TAILOR_MODEL`) — CV tailoring + cover letters (bump to
+  `gpt-4o` via env only if quality genuinely disappoints).
 All JSON-returning calls use OpenAI structured outputs (`response_format`
 json_schema, strict). The provider is pluggable: set `LLM_PROVIDER=anthropic` +
 `ANTHROPIC_API_KEY` to switch to Claude (Haiku 4.5 for parse, Sonnet 5 for
@@ -81,6 +96,7 @@ job-finder/
 │   ├── alembic/
 │   └── app/
 │       ├── main.py          # FastAPI app + routers
+│       ├── bot.py           # Telegram bot service (long-poll, buttons, /jobs, LLM chat)
 │       ├── config.py        # pydantic-settings
 │       ├── db.py            # async engine/session
 │       ├── auth.py          # JWT, current_user dependency, password hashing
@@ -88,15 +104,17 @@ job-finder/
 │       ├── constants.py     # FIELD_OPTIONS (see §4)
 │       ├── models/          # SQLAlchemy models
 │       ├── schemas/         # Pydantic DTOs
-│       ├── routers/         # auth, users(admin), profile, cvs, jobs, applications, searches, settings
+│       ├── routers/         # auth, users(admin), profile, cvs, jobs, applications, searches, settings, credentials
 │       ├── services/
-│       │   ├── llm.py            # Anthropic client + prompts
+│       │   ├── llm.py            # provider layer (structured JSON + plain text)
 │       │   ├── embeddings.py     # sentence-transformers, pgvector helpers
 │       │   ├── relevance.py      # hard filters + per-user cosine ranking
 │       │   ├── tailoring.py      # CV + cover letter generation
-│       │   ├── cv_render.py      # HTML→PDF (WeasyPrint), docx
+│       │   ├── cv_render.py      # HTML→PDF (WeasyPrint): CV + cover letter
 │       │   ├── cv_parse.py       # uploaded CV → structured profile
-│       │   └── notify.py         # Telegram/email, per-user
+│       │   ├── linkedin_resolve.py # LinkedIn post -> employer's direct apply link
+│       │   ├── throttle.py       # polite pacing + human-like Playwright context
+│       │   └── notify.py         # Telegram sends (messages, documents), per-user
 │       ├── connectors/      # discovery sources (pluggable)
 │       │   ├── base.py           # Connector ABC -> normalized Job dicts
 │       │   ├── greenhouse.py     # public board JSON API
@@ -104,18 +122,15 @@ job-finder/
 │       │   ├── ashby.py          # public job board API
 │       │   ├── gov_portals.py    # Jadarat / Qiwa / Taqat (national portals)
 │       │   ├── email_alerts.py   # IMAP: parse Bayt/Indeed/LinkedIn alert emails
-│       │   ├── bayt.py           # Playwright, human-paced (optional)
-│       │   └── linkedin.py       # Playwright, human-paced, DISCOVERY ONLY
-│       ├── appliers/        # form pre-fill adapters (Playwright)
-│       │   ├── base.py           # Applier ABC -> fill known, flag missing
-│       │   ├── greenhouse.py
-│       │   ├── lever.py
-│       │   └── generic.py        # heuristic label-matching fallback
+│       │   ├── company_site.py   # careers pages (+ render.careers for JS portals)
+│       │   ├── bayt.py           # human-paced (optional)
+│       │   └── linkedin.py       # paced guest API, DISCOVERY ONLY
 │       ├── tasks/           # Celery tasks
 │       │   ├── celery_app.py
-│       │   ├── discovery.py      # upsert global jobs -> embed -> per-user match/score
-│       │   ├── tailor.py         # build CV + cover letter for an application
-│       │   ├── prefill.py        # browser-worker: pre-fill a form, save state
+│       │   ├── discovery.py      # upsert jobs -> embed -> match -> Telegram job cards
+│       │   ├── tailor.py         # CV/letter PDFs -> saved + sent over Telegram
+│       │   ├── render.py         # browser-worker: render JS careers pages (discovery)
+│       │   ├── email_watch.py    # IMAP confirmations -> auto-mark submitted
 │       │   └── schedule.py       # Beat entries
 │       └── tests/
 └── web/                     # Next.js app
@@ -144,8 +159,8 @@ Concrete DDL in `db/schema.sql`. Key points:
   the same job independently.
 - **application_events** — per-application timeline; drives notifications.
 
-`status` enum: `discovered, drafting, ready_to_submit, submitted, interview, offer,
-rejected, withdrawn`.
+`status` enum (deliberately small): `discovered, ready, submitted, interview,
+offer, rejected` — `ready` means the tailored documents exist.
 
 ## 4. The "field" per user (selectable or free text)
 
@@ -187,14 +202,17 @@ Iqama fields.** Because the users are Saudi nationals, discovery should also sur
 **Saudization-linked roles** and the **national portals (Jadarat, Qiwa, Taqat)**,
 where nationals have an advantage.
 
-## 7. Application flow (review queue)
+## 7. Application flow (Telegram-first)
 
-`discovered` → select → `tailor` (ATS CV + cover letter) → `drafting` → `prefill`
-(browser-worker: fill known fields from answer bank, leave unknown/sensitive blank,
-record `missing_fields`, screenshot) → `ready_to_submit` → user reviews at
-`/applications/[id]`, completes gaps, submits (LinkedIn/Bayt: user submits in their own
-browser; standalone ATS: dashboard finalizes on confirm) → `application_events` →
-`notify` that user → `submitted`. User later flips to `interview`/`offer`/`rejected`.
+Discovery tracks a strong match (`discovered`) and messages it to the user on
+Telegram with buttons → user taps 📄/✉️/📄+✉️ → `tailor` task (gpt-4o-mini)
+generates the documents, renders PDFs, saves them on the application, sends them
+back over Telegram (→ `ready`) → the user opens the job link, applies manually,
+uploads the PDFs → taps “✅ I applied” (or the `email_watch` task spots the ATS
+confirmation email) → `submitted` + `application_events` + notify. The user (or
+future emails) later flips it to `interview`/`offer`/`rejected`. The web page per
+job shows the extracted description, the saved documents (regenerate buttons live
+inside each document's box), notes, and the timeline.
 
 ## 8. ATS optimization rules (enforce in cv_render)
 Single column. No tables, text boxes, headers/footers, or images. Standard headings
@@ -222,21 +240,28 @@ per-user cosine → `job_matches`). `discovery` Celery task + Beat. Ranked jobs 
 cover letter, constrained to that user's answer-bank data, using their style samples.
 `cv_render` (WeasyPrint, ATS rules) → PDF. Preview + keyword-coverage % in UI.
 
-**Phase 4 — Pre-fill / review queue.** Applier ABC + `greenhouse`/`lever`/`generic`.
-`prefill` task on browser-worker. Application detail page: review, complete gaps,
-submit/confirm.
+**Phase 4 — Telegram bot.** `app.bot` long-polling service: job cards with
+inline buttons (tailor CV/letter, ✅ I applied, 🙈 skip, 🔗 apply link), /jobs,
+/status, LLM chat fallback. Tailored PDFs delivered in-chat.
 
 **Phase 5 — Notifications & timeline.** `notify` (per-user Telegram). `application_events`
-timeline; emit + notify on submit/status change.
+timeline; emit + notify on submit/status change. `email_watch` auto-marks
+submitted from ATS confirmation emails.
 
 **Phase 6 — Bayt/LinkedIn (human-paced) + deploy.** Optional `bayt`/`linkedin`
-connectors in the user's real local browser, low velocity, randomized delays,
-discovery only. Harden, runbook, deploy via compose behind Caddy.
+connectors, low velocity, randomized delays, discovery only. Harden, runbook,
+deploy via compose behind Caddy.
+
+> **2026-07 pivot note:** the original Phase 4 (per-ATS pre-fill appliers +
+> browser-agent auto-submit) was built, then removed — per-platform form
+> automation was too brittle to trust. Do not reintroduce it. The product is
+> discovery + on-demand tailored documents + manual apply, driven from Telegram.
 
 ### Working agreement for Claude Code
 - Commit after every phase; keep phases independently runnable.
 - Match SQLAlchemy models to `db/schema.sql`, then generate Alembic migrations.
-- Enforce per-user isolation everywhere: every query is scoped by `current_user`.
+- Enforce per-user isolation everywhere: every query is scoped by `current_user`
+  (and in the bot, by the chat's bound user).
 - pytest for `relevance`, connectors (mock HTTP), field-mapping, and auth isolation.
 - All secrets in `.env`; never hardcode. See `.env.example` for the list.
-- Connectors/appliers are plugins implementing their ABC so new sources are drop-in.
+- Connectors are plugins implementing their ABC so new sources are drop-in.

@@ -1,6 +1,7 @@
 # Browser worker image. The Playwright base ships Chromium + its system deps;
-# we install the Python app deps on top. Used by the `browser` Celery queue
-# (form pre-fill / human-paced discovery in later phases).
+# we install the Python app deps on top. Used by the `browser` Celery queue —
+# DISCOVERY ONLY: rendering JavaScript careers portals (render.careers) that a
+# static fetch can't read. Nothing in this image applies or submits anywhere.
 # noble (Ubuntu 24.04) ships Python 3.12 to match the api image.
 FROM mcr.microsoft.com/playwright/python:v1.48.0-noble
 
@@ -13,12 +14,10 @@ WORKDIR /app
 # Heavy, source-independent deps on their OWN cached layers, BEFORE copying the
 # app source, so editing code never re-downloads them. The base image ships
 # browsers under /ms-playwright but not the playwright pip package — install it
-# matching the base version. browser-use (LLM browser-agent applier) is heavy and
-# installed only in this image. BuildKit pip cache + retries survive a flaky link.
+# matching the base version. BuildKit pip cache + retries survive a flaky link.
 RUN --mount=type=cache,target=/root/.cache/pip \
     pip install --upgrade pip \
-    && pip install --retries 10 --timeout 180 "playwright==1.48.0" \
-    && pip install --retries 10 --timeout 180 "browser-use==0.13.1"
+    && pip install --retries 10 --timeout 180 "playwright==1.48.0"
 
 COPY . .
 RUN --mount=type=cache,target=/root/.cache/pip \

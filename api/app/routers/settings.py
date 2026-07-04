@@ -71,13 +71,7 @@ async def get_discovery_prefs(
 ) -> DiscoveryPrefsOut:
     bank = await _bank(session, user.id)
     prefs = (bank.prefs if bank else {}) or {}
-    return DiscoveryPrefsOut(
-        ksa_only=prefs.get("ksa_only", True),
-        auto_apply_enabled=prefs.get("auto_apply_enabled", False),
-        auto_apply_threshold=prefs.get(
-            "auto_apply_threshold", app_settings.auto_apply_threshold_default
-        ),
-    )
+    return DiscoveryPrefsOut(ksa_only=prefs.get("ksa_only", True))
 
 
 @router.put("/discovery", response_model=DiscoveryPrefsOut)
@@ -86,11 +80,7 @@ async def update_discovery_prefs(
     user: AppUser = Depends(current_user),
     session: AsyncSession = Depends(get_session),
 ) -> DiscoveryPrefsOut:
-    prefs = {
-        "ksa_only": body.ksa_only,
-        "auto_apply_enabled": body.auto_apply_enabled,
-        "auto_apply_threshold": body.auto_apply_threshold,
-    }
+    prefs = {"ksa_only": body.ksa_only}
     bank = await _bank(session, user.id)
     if bank is None:
         bank = AnswerBank(user_id=user.id, prefs=prefs)

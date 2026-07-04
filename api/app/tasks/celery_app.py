@@ -26,9 +26,16 @@ celery_app.conf.update(
             "task": "discovery.run",
             "schedule": settings.discovery_interval_minutes * 60.0,
         },
+        # Scan the IMAP inbox for "application received" confirmation emails and
+        # auto-mark the matching applications as submitted. No-op unless IMAP is
+        # configured in .env.
+        "email-confirmations": {
+            "task": "email_watch.run",
+            "schedule": settings.email_watch_interval_minutes * 60.0,
+        },
     },
 )
 
 # Import task modules so their @celery_app.task decorators register. Done after
 # celery_app is defined to avoid a circular import.
-from app.tasks import discovery, prefill, render, submit, tailor  # noqa: E402,F401
+from app.tasks import discovery, email_watch, render, tailor  # noqa: E402,F401

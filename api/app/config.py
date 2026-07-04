@@ -50,12 +50,11 @@ class Settings(BaseSettings):
     # --- Discovery / relevance (Phase 2) ---
     match_threshold: float = 0.25  # min cosine to be a candidate (recall)
     auto_track_threshold: float = 0.55  # auto-create a `discovered` application
-    # Default relevance floor for auto-APPLY (pre-fill high matches). Single source
-    # of truth shared by discovery and the settings API so the UI and the pipeline
-    # agree when the user hasn't set a custom threshold.
-    auto_apply_threshold_default: float = 0.6
     rerank_top_k: int = 40  # top cosine candidates to LLM re-rank per user
     discovery_interval_minutes: int = 360  # Celery Beat cadence
+    # Max per-job Telegram messages (with action buttons) per user per discovery
+    # run; anything beyond is summarized so the chat isn't flooded.
+    telegram_jobs_per_run: int = 8
 
     # --- LinkedIn discovery hardening (avoid rate-limit / blocking) ---
     # Comma-separated proxy URLs (e.g. "http://user:pass@host:port,http://..."),
@@ -67,11 +66,15 @@ class Settings(BaseSettings):
     linkedin_max_retries: int = 3     # retries on 429/999/403 (with backoff)
     linkedin_backoff_base: float = 20.0  # base backoff seconds (x attempt)
 
-    # IMAP (email_alerts connector). Connector returns [] unless these are set.
+    # IMAP (email_alerts connector + submission-confirmation watcher). Both are
+    # no-ops unless these are set.
     imap_host: str | None = None
     imap_user: str | None = None
     imap_password: str | None = None
     imap_folder: str = "INBOX"
+    # How often the watcher scans the inbox for "application received" emails to
+    # auto-mark applications as submitted.
+    email_watch_interval_minutes: int = 30
 
     # --- LLM provider (CV parsing + tailoring) ---
     # This deployment uses OpenAI. "openai" forces the OpenAI path; "auto" would
@@ -80,35 +83,13 @@ class Settings(BaseSettings):
     llm_provider: str = "openai"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
-    openai_tailor_model: str = "gpt-4o"
+    # Tailoring is deliberately on the cheap model: generation happens per job on
+    # a Telegram button tap, so cost-per-document matters more than max polish.
+    openai_tailor_model: str = "gpt-4o-mini"
     openai_parse_model: str = "gpt-4o-mini"
 
-    # --- Agent applier (browser-use LLM-driven form fill) ---
-    # The LLM browser agent reads a page and fills it like a human, so it
-    # generalizes to arbitrary company career sites the deterministic ATS adapters
-    # don't cover. On auto-submit it is the PRIMARY path for unknown/long-tail
-    # platforms (no dedicated adapter matched) and a fallback for known ATS whose
-    # deterministic fill came up short. It only runs on the explicit, user-triggered
-    # auto-submit (never in bulk pre-fill). `agent_applier_model` is an OpenAI
-    # vision model (browser-use needs vision); it uses OPENAI_API_KEY.
-    agent_applier_enabled: bool = True
-    agent_applier_model: str = "gpt-4.1"
-
-    # --- Universal portal login ---
-    # A single shared login used for ANY employer ATS that has no tenant-specific
-    # credential stored. When a form is behind a sign-in / create-account wall, the
-    # agent signs in with it — or registers a new account with it if none exists.
-    # Set here via env, OR store a host="*" entry in Settings → Employer portal
-    # logins (the DB entry, being encrypted + per-user, takes precedence).
-    portal_universal_username: str | None = None
-    portal_universal_password: str | None = None
-
-    # --- External services (later phases) ---
+    # --- Telegram bot (notifications + the primary action surface) ---
     telegram_bot_token: str | None = None
-    # Auto-submit OTP relay: when a portal emails a verification code, the submit
-    # task pauses on the code screen and asks the user for the code over Telegram,
-    # waiting up to this many seconds before giving up (-> Needs Fixes).
-    submit_otp_wait_seconds: int = 180
 
     @property
     def database_url(self) -> str:

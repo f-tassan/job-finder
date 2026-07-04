@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Boolean, Float, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import Float, ForeignKey, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -14,18 +14,15 @@ from app.models.base import Base
 
 
 class ApplicationStatus(str, enum.Enum):
+    """Deliberately small: discovered -> ready (tailored docs generated) ->
+    submitted (user applied) -> interview -> offer / rejected."""
+
     discovered = "discovered"
-    drafting = "drafting"
-    # Pipeline ran but the form couldn't be fully prepared (error, login needed,
-    # nothing fillable, or genuine unfilled required fields) — the human opens it,
-    # fixes the gaps, and advances it to ready_to_submit.
-    needs_attention = "needs_attention"
-    ready_to_submit = "ready_to_submit"
+    ready = "ready"
     submitted = "submitted"
     interview = "interview"
     offer = "offer"
     rejected = "rejected"
-    withdrawn = "withdrawn"
 
 
 # Map to the existing PG enum type; do not let SQLAlchemy try to create it.
@@ -56,20 +53,8 @@ class Application(Base):
     )
     tailored_cv_path: Mapped[str | None] = mapped_column(Text)
     cover_letter: Mapped[str | None] = mapped_column(Text)
-    prefilled_answers: Mapped[dict] = mapped_column(JSONB, nullable=False, default=dict)
-    missing_fields: Mapped[list] = mapped_column(JSONB, nullable=False, default=list)
-    # Labels of pre-filled answers the LLM derived from the answer bank; their
-    # values live clean in prefilled_answers and this list flags them "verify".
-    ai_suggested_fields: Mapped[list] = mapped_column(
-        JSONB, nullable=False, default=list
-    )
-    # Set by prefill when the portal required a login but no credential was stored
-    # (or login failed): the user must add a login in Settings, then Retry.
-    needs_credentials: Mapped[bool] = mapped_column(
-        Boolean, nullable=False, default=False
-    )
+    cover_letter_path: Mapped[str | None] = mapped_column(Text)  # rendered PDF
     keyword_coverage: Mapped[float | None] = mapped_column(Float)
-    screenshot_path: Mapped[str | None] = mapped_column(Text)
     submitted_at: Mapped[datetime | None] = mapped_column()
     notes: Mapped[str | None] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
@@ -89,8 +74,8 @@ class Application(Base):
         return bool(self.tailored_cv_path)
 
     @property
-    def has_screenshot(self) -> bool:
-        return bool(self.screenshot_path)
+    def has_cover_letter_pdf(self) -> bool:
+        return bool(self.cover_letter_path)
 
 
 class ApplicationEvent(Base):
