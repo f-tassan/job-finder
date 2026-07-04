@@ -6,7 +6,7 @@ import uuid
 from datetime import datetime
 
 from sqlalchemy import Enum as SAEnum
-from sqlalchemy import Float, ForeignKey, Text, UniqueConstraint, func
+from sqlalchemy import Float, ForeignKey, Integer, Text, UniqueConstraint, func
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.orm import Mapped, mapped_column, relationship
 
@@ -68,6 +68,11 @@ class Application(Base):
         cascade="all, delete-orphan",
         order_by="ApplicationEvent.created_at",
     )
+    documents: Mapped[list["ApplicationDocument"]] = relationship(
+        back_populates="application",
+        cascade="all, delete-orphan",
+        order_by="ApplicationDocument.kind, ApplicationDocument.version",
+    )
 
     @property
     def has_tailored_cv(self) -> bool:
@@ -76,6 +81,35 @@ class Application(Base):
     @property
     def has_cover_letter_pdf(self) -> bool:
         return bool(self.cover_letter_path)
+
+
+class ApplicationDocument(Base):
+    """One generated version of a tailored document (CV or cover letter). Each
+    tailor/regenerate run appends a new row so every version is kept and
+    browsable; the Application's tailored_cv_path/cover_letter(_path) mirror the
+    LATEST version for the existing single-file download + preview paths."""
+
+    __tablename__ = "application_documents"
+    __table_args__ = (
+        UniqueConstraint("application_id", "kind", "version"),
+    )
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    application_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("applications.id", ondelete="CASCADE"), nullable=False
+    )
+    kind: Mapped[str] = mapped_column(Text, nullable=False)  # "cv" | "cover_letter"
+    version: Mapped[int] = mapped_column(Integer, nullable=False)  # 1-based per kind
+    file_path: Mapped[str | None] = mapped_column(Text)  # rendered PDF
+    text: Mapped[str | None] = mapped_column(Text)  # cover-letter body (display)
+    keyword_coverage: Mapped[float | None] = mapped_column(Float)  # cv only
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+    application: Mapped[Application] = relationship(back_populates="documents")
+
+    @property
+    def has_pdf(self) -> bool:
+        return bool(self.file_path)
 
 
 class ApplicationEvent(Base):

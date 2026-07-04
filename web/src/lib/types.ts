@@ -64,11 +64,22 @@ export interface ApplicationEvent {
   created_at: string;
 }
 
+export interface ApplicationDocument {
+  id: string;
+  kind: "cv" | "cover_letter";
+  version: number;
+  keyword_coverage: number | null;
+  text: string | null;
+  has_pdf: boolean;
+  created_at: string;
+}
+
 export interface ApplicationDetail extends Application {
   job: Job & { description: string | null };
   cover_letter: string | null;
   has_tailored_cv: boolean;
   has_cover_letter_pdf: boolean;
+  documents: ApplicationDocument[];
   events: ApplicationEvent[];
 }
 

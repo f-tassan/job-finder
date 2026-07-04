@@ -114,6 +114,20 @@ class ApplicationEventOut(BaseModel):
     created_at: datetime
 
 
+class ApplicationDocumentOut(BaseModel):
+    """One generated version of a tailored document."""
+
+    model_config = ConfigDict(from_attributes=True)
+
+    id: uuid.UUID
+    kind: str  # "cv" | "cover_letter"
+    version: int
+    keyword_coverage: float | None = None
+    text: str | None = None  # cover-letter body (for display)
+    has_pdf: bool = False
+    created_at: datetime
+
+
 class ApplicationOut(BaseModel):
     model_config = ConfigDict(from_attributes=True)
 
@@ -133,6 +147,7 @@ class ApplicationDetailOut(ApplicationOut):
     cover_letter: str | None = None
     has_tailored_cv: bool = False
     has_cover_letter_pdf: bool = False
+    documents: list[ApplicationDocumentOut] = []
     events: list[ApplicationEventOut] = []
 
 

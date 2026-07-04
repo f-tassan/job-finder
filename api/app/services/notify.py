@@ -11,6 +11,7 @@ would steal each other's updates.
 """
 from __future__ import annotations
 
+import json
 import logging
 import time
 import uuid
@@ -66,8 +67,10 @@ async def send_telegram_document(
     *,
     filename: str | None = None,
     caption: str | None = None,
+    reply_markup: dict | None = None,
 ) -> bool:
-    """Send a file (e.g. a tailored CV PDF) to the chat."""
+    """Send a file (e.g. a tailored CV PDF) to the chat, optionally with an
+    inline keyboard (e.g. a Regenerate button)."""
     token = settings.telegram_bot_token
     if not token or not chat_id:
         return False
@@ -78,6 +81,8 @@ async def send_telegram_document(
     data: dict = {"chat_id": chat_id}
     if caption:
         data["caption"] = caption
+    if reply_markup:
+        data["reply_markup"] = json.dumps(reply_markup)
     try:
         with path.open("rb") as fh:
             files = {"document": (filename or path.name, fh, "application/pdf")}

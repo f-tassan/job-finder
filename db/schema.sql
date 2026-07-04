@@ -123,3 +123,20 @@ CREATE TABLE application_events (
     created_at     TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX application_events_app_idx ON application_events(application_id, created_at);
+
+-- Every generated version of a tailored document (CV or cover letter). Each
+-- tailor/regenerate run appends a row so all versions are kept and browsable;
+-- applications.tailored_cv_path/cover_letter(_path) mirror the latest version.
+CREATE TABLE application_documents (
+    id               UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    application_id   UUID NOT NULL REFERENCES applications(id) ON DELETE CASCADE,
+    kind             TEXT NOT NULL,                 -- 'cv' | 'cover_letter'
+    version          INTEGER NOT NULL,              -- 1-based per (application, kind)
+    file_path        TEXT,                          -- rendered PDF
+    text             TEXT,                          -- cover-letter body (for display)
+    keyword_coverage DOUBLE PRECISION,              -- cv only
+    created_at       TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (application_id, kind, version)
+);
+CREATE INDEX application_documents_app_kind_idx
+    ON application_documents(application_id, kind, version);

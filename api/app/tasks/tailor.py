@@ -9,13 +9,14 @@ import re
 import uuid
 from pathlib import Path
 
-from sqlalchemy import select
+from sqlalchemy import func, select
 
 from app.config import settings
 from app.db import SessionLocal
 from app.models import (
     AnswerBank,
     Application,
+    ApplicationDocument,
     ApplicationEvent,
     ApplicationStatus,
     AppUser,
@@ -26,6 +27,19 @@ from app.services import cv_render, tailoring
 from app.tasks.celery_app import celery_app
 
 logger = logging.getLogger(__name__)
+
+
+async def _next_version(session, app_id: uuid.UUID, kind: str) -> int:
+    """Next 1-based version number for (application, kind)."""
+    current = (
+        await session.execute(
+            select(func.max(ApplicationDocument.version)).where(
+                ApplicationDocument.application_id == app_id,
+                ApplicationDocument.kind == kind,
+            )
+        )
+    ).scalar()
+    return (current or 0) + 1
 
 
 def _doc_name(kind: str, job: Job) -> str:
@@ -84,23 +98,52 @@ async def _tailor(app_id: uuid.UUID, make_cv: bool, make_letter: bool) -> dict:
         }
         out_dir = Path(settings.files_dir) / str(app.user_id) / "tailored"
 
+        # Each run appends a NEW version (a fresh PDF at a versioned path); the
+        # app's *_path columns mirror the latest for the single-file endpoints.
+        cv_version = letter_version = None
         if make_cv and result["cv"] is not None:
-            cv_path = str(out_dir / f"{app.id}.pdf")
+            cv_version = await _next_version(session, app.id, "cv")
+            cv_path = str(out_dir / f"{app.id}_cv_v{cv_version}.pdf")
+            rendered = False
             try:
                 cv_render.render_cv_pdf(result["cv"], contact, cv_path)
+                rendered = True
                 app.tailored_cv_path = cv_path
-            except Exception:  # noqa: BLE001 - keep text output even if PDF fails
+            except Exception:  # noqa: BLE001 - keep record even if PDF fails
                 logger.exception("CV PDF render failed for application %s", app.id)
             app.keyword_coverage = result["keyword_coverage"]
+            session.add(
+                ApplicationDocument(
+                    application_id=app.id,
+                    kind="cv",
+                    version=cv_version,
+                    file_path=cv_path if rendered else None,
+                    keyword_coverage=result["keyword_coverage"],
+                )
+            )
 
         if make_letter and result["cover_letter"]:
+            letter_version = await _next_version(session, app.id, "cover_letter")
             app.cover_letter = result["cover_letter"]
-            letter_path = str(out_dir / f"{app.id}_cover_letter.pdf")
+            letter_path = str(
+                out_dir / f"{app.id}_cover_letter_v{letter_version}.pdf"
+            )
+            rendered = False
             try:
                 cv_render.render_letter_pdf(result["cover_letter"], contact, letter_path)
+                rendered = True
                 app.cover_letter_path = letter_path
             except Exception:  # noqa: BLE001
                 logger.exception("letter PDF render failed for application %s", app.id)
+            session.add(
+                ApplicationDocument(
+                    application_id=app.id,
+                    kind="cover_letter",
+                    version=letter_version,
+                    file_path=letter_path if rendered else None,
+                    text=result["cover_letter"],
+                )
+            )
 
         if app.status == ApplicationStatus.discovered:
             app.status = ApplicationStatus.ready
@@ -129,41 +172,62 @@ async def _tailor(app_id: uuid.UUID, make_cv: bool, make_letter: bool) -> dict:
         chat_id = await chat_id_for_user(session, app.user_id)
         if chat_id:
             title = job.title + (f" at {job.company}" if job.company else "")
-            if app.tailored_cv_path and make_cv:
+            # Each document carries its own "🔄 Regenerate" button, so the user
+            # can make another version if they don't like this one.
+            if app.tailored_cv_path and cv_version:
+                vtag = f" (v{cv_version})" if cv_version > 1 else ""
                 await send_telegram_document(
                     chat_id,
                     app.tailored_cv_path,
                     filename=_doc_name("CV", job),
-                    caption=f"📄 Tailored CV — {title}",
+                    caption=f"📄 Tailored CV{vtag} — {title}",
+                    reply_markup={
+                        "inline_keyboard": [
+                            [{"text": "🔄 Regenerate CV", "callback_data": f"cv:{app.id}"}]
+                        ]
+                    },
                 )
-            if app.cover_letter_path and make_letter:
+            if app.cover_letter_path and letter_version:
+                vtag = f" (v{letter_version})" if letter_version > 1 else ""
                 await send_telegram_document(
                     chat_id,
                     app.cover_letter_path,
                     filename=_doc_name("Cover_Letter", job),
-                    caption=f"✉️ Cover letter — {title}",
+                    caption=f"✉️ Cover letter{vtag} — {title}",
+                    reply_markup={
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "🔄 Regenerate Cover Letter",
+                                    "callback_data": f"cl:{app.id}",
+                                }
+                            ]
+                        ]
+                    },
                 )
             done = []
-            if make_cv:
+            if cv_version:
                 done.append("CV")
-            if make_letter:
+            if letter_version:
                 done.append("cover letter")
-            await send_telegram(
-                chat_id,
-                f"✅ {' + '.join(done)} ready for {title}.\n"
-                f"Apply here: {job.url}\n"
-                "When you've applied, tap the button and I'll track it.",
-                reply_markup={
-                    "inline_keyboard": [
-                        [
-                            {
-                                "text": "✅ I applied",
-                                "callback_data": f"applied:{app.id}",
-                            }
+            if done:
+                await send_telegram(
+                    chat_id,
+                    f"✅ {' + '.join(done)} ready for {title}.\n"
+                    f"Apply here: {job.url}\n"
+                    "Not happy with a document? Tap 🔄 Regenerate under it. When "
+                    "you've applied, tap ✅ and I'll track it.",
+                    reply_markup={
+                        "inline_keyboard": [
+                            [
+                                {
+                                    "text": "✅ I applied",
+                                    "callback_data": f"applied:{app.id}",
+                                }
+                            ]
                         ]
-                    ]
-                },
-            )
+                    },
+                )
     return {
         "application_id": str(app_id),
         "used_llm": result["used_llm"],

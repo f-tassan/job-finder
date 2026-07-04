@@ -10,8 +10,18 @@ import {
   STATUS_LABELS,
   STATUSES,
   type ApplicationDetail,
+  type ApplicationDocument,
   type ApplicationStatus,
 } from "@/lib/types";
+
+function fmtDate(s: string): string {
+  return new Date(s).toLocaleString(undefined, {
+    month: "short",
+    day: "numeric",
+    hour: "2-digit",
+    minute: "2-digit",
+  });
+}
 
 export default function ApplicationDetailPage() {
   const params = useParams();
@@ -20,6 +30,8 @@ export default function ApplicationDetailPage() {
   const [notes, setNotes] = useState("");
   const [cvUrl, setCvUrl] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [selectedCvId, setSelectedCvId] = useState<string | null>(null);
+  const [selectedLetterId, setSelectedLetterId] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
     queryKey: ["application", id],
@@ -30,14 +42,27 @@ export default function ApplicationDetailPage() {
     if (data) setNotes(data.notes || "");
   }, [data]);
 
-  // Load the tailored CV PDF (authed) as an object URL for the inline preview.
+  // Version lists, newest first. Computed from data (guarded for first render).
+  const documents = data?.documents ?? [];
+  const cvDocs = documents
+    .filter((d) => d.kind === "cv")
+    .sort((a, b) => b.version - a.version);
+  const letterDocs = documents
+    .filter((d) => d.kind === "cover_letter")
+    .sort((a, b) => b.version - a.version);
+  const selectedCv =
+    cvDocs.find((d) => d.id === selectedCvId) ?? cvDocs[0] ?? null;
+  const selectedLetter =
+    letterDocs.find((d) => d.id === selectedLetterId) ?? letterDocs[0] ?? null;
+
+  // Preview the selected CV version (authed PDF -> object URL).
   useEffect(() => {
-    if (!data?.has_tailored_cv) {
+    if (!selectedCv?.has_pdf) {
       setCvUrl(null);
       return;
     }
     let revoked: string | null = null;
-    fetch(`${API_BASE}/applications/${id}/cv`, {
+    fetch(`${API_BASE}/applications/${id}/documents/${selectedCv.id}`, {
       headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
     })
       .then((r) => (r.ok ? r.blob() : null))
@@ -50,7 +75,7 @@ export default function ApplicationDetailPage() {
     return () => {
       if (revoked) URL.revokeObjectURL(revoked);
     };
-  }, [data?.has_tailored_cv, id]);
+  }, [selectedCv?.id, selectedCv?.has_pdf, id]);
 
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -61,36 +86,40 @@ export default function ApplicationDetailPage() {
     },
   });
 
-  // Generate the tailored CV and/or the cover letter (cheap model). The PDFs
-  // are stored here for reference AND sent to the user's Telegram chat.
+  // Generate a fresh version of the CV and/or cover letter (cheap model). Each
+  // run APPENDS a version — saved here and sent to Telegram. Poll a few times
+  // since generation takes ~20s.
   const tailor = useMutation({
     mutationFn: (which: { cv: boolean; cover_letter: boolean }) =>
       apiSend(`/applications/${id}/tailor`, "POST", which),
     onSuccess: (_r, which) => {
-      setMsg(
-        `${which.cv && which.cover_letter ? "CV + cover letter" : which.cv ? "CV" : "Cover letter"} queued — the PDF lands here and on Telegram in ~20s.`,
+      const label = which.cv ? "CV" : "Cover letter";
+      setMsg(`New ${label} generating — it appears here and on Telegram in ~20s.`);
+      [6000, 14000, 24000].forEach((t) =>
+        setTimeout(
+          () => qc.invalidateQueries({ queryKey: ["application", id] }),
+          t,
+        ),
       );
-      setTimeout(() => {
-        qc.invalidateQueries({ queryKey: ["application", id] });
-        setMsg(null);
-      }, 8000);
+      setTimeout(() => setMsg(null), 24000);
     },
     onError: (e) => setMsg(e instanceof Error ? e.message : "Failed"),
   });
 
-  async function download(path: string, filename: string) {
-    const res = await fetch(`${API_BASE}/applications/${id}/${path}`, {
-      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
-    });
+  async function downloadDoc(doc: ApplicationDocument) {
+    const res = await fetch(
+      `${API_BASE}/applications/${id}/documents/${doc.id}`,
+      { headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {} },
+    );
     if (!res.ok) {
-      setMsg("Not generated yet.");
+      setMsg("That version's PDF isn't available.");
       return;
     }
     const blob = await res.blob();
     const url = URL.createObjectURL(blob);
     const a = document.createElement("a");
     a.href = url;
-    a.download = filename;
+    a.download = `${doc.kind}_v${doc.version}.pdf`;
     a.click();
     URL.revokeObjectURL(url);
   }
@@ -100,6 +129,49 @@ export default function ApplicationDetailPage() {
       <AppShell>
         <p className="text-slate-400">Loading…</p>
       </AppShell>
+    );
+  }
+
+  // A row of selectable version chips (newest first). `latest` is chip index 0.
+  function VersionChips({
+    docs,
+    selectedId,
+    onSelect,
+    showCoverage,
+  }: {
+    docs: ApplicationDocument[];
+    selectedId: string | null | undefined;
+    onSelect: (docId: string) => void;
+    showCoverage?: boolean;
+  }) {
+    if (docs.length <= 1) return null;
+    return (
+      <div className="mb-3 flex flex-wrap gap-1.5">
+        {docs.map((d, i) => {
+          const active = d.id === selectedId;
+          return (
+            <button
+              key={d.id}
+              onClick={() => onSelect(d.id)}
+              title={fmtDate(d.created_at)}
+              className={
+                "rounded-md border px-2 py-1 text-xs transition " +
+                (active
+                  ? "border-indigo-500 bg-indigo-500/15 text-indigo-200"
+                  : "border-slate-700 text-slate-400 hover:border-slate-500")
+              }
+            >
+              v{d.version}
+              {i === 0 && " · latest"}
+              {showCoverage && d.keyword_coverage != null && (
+                <span className="ml-1 text-[10px] text-slate-500">
+                  {Math.round(d.keyword_coverage * 100)}%
+                </span>
+              )}
+            </button>
+          );
+        })}
+      </div>
     );
   }
 
@@ -186,11 +258,16 @@ export default function ApplicationDetailPage() {
       </div>
 
       <div className="mt-4 grid grid-cols-1 gap-4 lg:grid-cols-2">
-        {/* Tailored CV box — generation lives here, per document. */}
+        {/* Tailored CV box — generate + version history + preview. */}
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
               Tailored CV
+              {cvDocs.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-slate-500">
+                  {cvDocs.length} version{cvDocs.length > 1 ? "s" : ""}
+                </span>
+              )}
             </h2>
             <div className="flex items-center gap-2">
               <button
@@ -200,13 +277,13 @@ export default function ApplicationDetailPage() {
               >
                 {tailor.isPending
                   ? "Queuing…"
-                  : data.has_tailored_cv
-                    ? "Re-tailor CV"
+                  : cvDocs.length > 0
+                    ? "🔄 Regenerate CV"
                     : "Tailor CV"}
               </button>
-              {data.has_tailored_cv && (
+              {selectedCv?.has_pdf && (
                 <button
-                  onClick={() => download("cv", "tailored_cv.pdf")}
+                  onClick={() => downloadDoc(selectedCv)}
                   className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
                 >
                   Download PDF
@@ -214,6 +291,12 @@ export default function ApplicationDetailPage() {
               )}
             </div>
           </div>
+          <VersionChips
+            docs={cvDocs}
+            selectedId={selectedCv?.id}
+            onSelect={setSelectedCvId}
+            showCoverage
+          />
           {cvUrl ? (
             <iframe
               src={cvUrl}
@@ -222,18 +305,24 @@ export default function ApplicationDetailPage() {
             />
           ) : (
             <p className="text-sm text-slate-500">
-              No tailored CV yet. Generate one here (or tap 📄 CV on the job’s
-              Telegram message) — it’s tailored to this job from your answer
-              bank, saved here, and sent to you on Telegram.
+              No tailored CV yet. Generate one here (or tap 📄 Generate CV on the
+              job’s Telegram message) — it’s tailored to this job from your
+              answer bank, saved here, and sent to you on Telegram. Every version
+              you generate is kept.
             </p>
           )}
         </div>
 
-        {/* Cover letter box — generation lives here too. */}
+        {/* Cover letter box — generate + version history + text. */}
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <div className="mb-3 flex flex-wrap items-center justify-between gap-2">
             <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
               Cover letter
+              {letterDocs.length > 0 && (
+                <span className="ml-2 text-xs font-normal text-slate-500">
+                  {letterDocs.length} version{letterDocs.length > 1 ? "s" : ""}
+                </span>
+              )}
             </h2>
             <div className="flex items-center gap-2">
               <button
@@ -243,13 +332,13 @@ export default function ApplicationDetailPage() {
               >
                 {tailor.isPending
                   ? "Queuing…"
-                  : data.cover_letter
-                    ? "Regenerate letter"
+                  : letterDocs.length > 0
+                    ? "🔄 Regenerate letter"
                     : "Tailor cover letter"}
               </button>
-              {data.has_cover_letter_pdf && (
+              {selectedLetter?.has_pdf && (
                 <button
-                  onClick={() => download("cover-letter", "cover_letter.pdf")}
+                  onClick={() => downloadDoc(selectedLetter)}
                   className="rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
                 >
                   Download PDF
@@ -257,17 +346,22 @@ export default function ApplicationDetailPage() {
               )}
             </div>
           </div>
-          {data.cover_letter ? (
+          <VersionChips
+            docs={letterDocs}
+            selectedId={selectedLetter?.id}
+            onSelect={setSelectedLetterId}
+          />
+          {selectedLetter?.text ? (
             <div className="max-h-[520px] overflow-y-auto pr-2">
               <pre className="whitespace-pre-wrap font-sans text-sm text-slate-200">
-                {data.cover_letter}
+                {selectedLetter.text}
               </pre>
             </div>
           ) : (
             <p className="text-sm text-slate-500">
-              No cover letter yet. Generate one here (or tap ✉️ Letter on
-              Telegram) — written for this job and company from your real
-              background, never invented.
+              No cover letter yet. Generate one here (or tap ✉️ Generate Cover
+              Letter on Telegram) — written for this job and company from your
+              real background, never invented. Every version is kept.
             </p>
           )}
         </div>

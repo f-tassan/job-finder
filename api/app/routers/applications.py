@@ -17,6 +17,7 @@ from app.auth import current_user
 from app.db import get_session
 from app.models import (
     Application,
+    ApplicationDocument,
     ApplicationEvent,
     ApplicationStatus,
     AppUser,
@@ -39,7 +40,10 @@ async def _owned(session: AsyncSession, user_id, app_id, *, with_events=False):
         Application.id == app_id, Application.user_id == user_id
     )
     if with_events:
-        stmt = stmt.options(selectinload(Application.events))
+        stmt = stmt.options(
+            selectinload(Application.events),
+            selectinload(Application.documents),
+        )
     app = (await session.execute(stmt)).scalar_one_or_none()
     if app is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
@@ -196,6 +200,22 @@ async def download_cover_letter(
             status_code=status.HTTP_404_NOT_FOUND, detail="No cover letter PDF yet"
         )
     return FileResponse(app.cover_letter_path, filename="cover_letter.pdf")
+
+
+@router.get("/{app_id}/documents/{doc_id}")
+async def download_document(
+    app_id: uuid.UUID,
+    doc_id: uuid.UUID,
+    user: AppUser = Depends(current_user),
+    session: AsyncSession = Depends(get_session),
+) -> FileResponse:
+    """Download one specific generated version (any CV / cover-letter version)."""
+    await _owned(session, user.id, app_id)
+    doc = await session.get(ApplicationDocument, doc_id)
+    if doc is None or doc.application_id != app_id or not doc.file_path:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Not found")
+    fname = f"{doc.kind}_v{doc.version}.pdf"
+    return FileResponse(doc.file_path, filename=fname)
 
 
 @router.delete("/{app_id}", status_code=status.HTTP_204_NO_CONTENT)

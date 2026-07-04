@@ -1,6 +1,7 @@
 """ORM models."""
 from app.models.application import (
     Application,
+    ApplicationDocument,
     ApplicationEvent,
     ApplicationStatus,
 )
@@ -19,6 +20,7 @@ __all__ = [
     "Job",
     "JobMatch",
     "Application",
+    "ApplicationDocument",
     "ApplicationEvent",
     "ApplicationStatus",
 ]
