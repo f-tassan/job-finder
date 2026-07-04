@@ -52,10 +52,10 @@ _OFFSET_KEY = "tg:bot:offset"
 _HELP = (
     "I find jobs for you and prepare tailored documents.\n\n"
     "• When discovery finds a strong match, I message you the job with its "
-    "link and buttons.\n"
-    "• Tap 📄 CV / ✉️ Letter / 📄+✉️ Both and I'll generate tailored PDFs for "
-    "that exact job and send them here — you apply on the site yourself and "
-    "upload them.\n"
+    "details, link, and buttons.\n"
+    "• Tap 📄 Generate CV / ✉️ Generate Cover Letter and I'll build a tailored "
+    "PDF for that exact job and send it here — you apply on the site yourself "
+    "and upload it. Nothing is generated until you ask (no wasted credits).\n"
     "• Tap ✅ I applied afterwards and I'll track it as submitted — no need to "
     "touch the dashboard.\n\n"
     "Commands:\n"
@@ -69,20 +69,19 @@ _HELP = (
 
 def job_buttons(app_id: str, *, linkedin: bool = False) -> dict:
     """Inline keyboard for one tracked job. Shared with the discovery task so
-    every job message in the chat behaves the same."""
+    every job message in the chat behaves the same. Documents are generated
+    ONLY when their button is tapped — never automatically — so no LLM credits
+    are spent on jobs the user doesn't pursue."""
     rows = [
+        [{"text": "✅ I applied", "callback_data": f"applied:{app_id}"}],
         [
-            {"text": "📄 CV", "callback_data": f"cv:{app_id}"},
-            {"text": "✉️ Letter", "callback_data": f"cl:{app_id}"},
-            {"text": "📄+✉️ Both", "callback_data": f"both:{app_id}"},
+            {"text": "📄 Generate CV", "callback_data": f"cv:{app_id}"},
+            {"text": "✉️ Generate Cover Letter", "callback_data": f"cl:{app_id}"},
         ],
-        [
-            {"text": "✅ I applied", "callback_data": f"applied:{app_id}"},
-            {"text": "🙈 Skip", "callback_data": f"skip:{app_id}"},
-        ],
+        [{"text": "🙈 Skip", "callback_data": f"skip:{app_id}"}],
     ]
     if linkedin:
-        rows[1].append({"text": "🔗 Apply link", "callback_data": f"link:{app_id}"})
+        rows[2].append({"text": "🔗 Apply link", "callback_data": f"link:{app_id}"})
     return {"inline_keyboard": rows}
 
 
@@ -95,16 +94,28 @@ def _esc(s: str | None) -> str:
     )
 
 
-def format_job_html(job: Job, score: float | None = None) -> str:
+def format_job_html(
+    job: Job, score: float | None = None, *, header: str | None = None
+) -> str:
+    """A job notification card: headline, company/location, match %, a short
+    excerpt of the posting, and the link to apply."""
+    parts: list[str] = []
+    if header:
+        parts.append(header)
+    parts.append(f"<b>{_esc(job.title)}</b>")
     line2 = " · ".join(p for p in (job.company, job.location) if p)
-    parts = [f"<b>{_esc(job.title)}</b>"]
     if line2:
-        parts.append(_esc(line2))
+        parts.append(f"🏢 {_esc(line2)}")
     meta = [job.source]
     if score is not None:
         meta.append(f"match {round(score * 100)}%")
     parts.append(" · ".join(meta))
-    parts.append(job.url)
+    if job.description:
+        snippet = " ".join((job.description or "").split())
+        if len(snippet) > 300:
+            snippet = snippet[:300].rsplit(" ", 1)[0] + "…"
+        parts.append(f"<i>{_esc(snippet)}</i>")
+    parts.append(f"🔗 {job.url}")
     return "\n".join(parts)
 
 

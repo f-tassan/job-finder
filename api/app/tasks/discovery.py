@@ -334,14 +334,10 @@ async def _run_discovery(progress=None) -> dict:
             if not chat_id:
                 continue
             cap = settings.telegram_jobs_per_run
-            await send_telegram(
-                chat_id,
-                f"🔎 {len(auto_tracked)} new strong match(es) for you:",
-            )
             for app_id, job, score in auto_tracked[:cap]:
                 await send_telegram(
                     chat_id,
-                    format_job_html(job, score),
+                    format_job_html(job, score, header="🆕 <b>New job discovered</b>"),
                     parse_mode="HTML",
                     reply_markup=job_buttons(
                         app_id, linkedin="linkedin" in (job.source or "")

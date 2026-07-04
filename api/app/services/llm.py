@@ -22,13 +22,31 @@ _ANTHROPIC_PARSE = "claude-haiku-4-5-20251001"
 _ANTHROPIC_TAILOR = "claude-sonnet-5"
 
 TAILOR_SYSTEM = (
-    "You are an expert CV writer for the Saudi Arabian job market. You tailor an "
-    "applicant's existing CV to a specific job. ABSOLUTE RULE: use ONLY facts "
-    "present in the applicant data provided — never invent employers, titles, "
-    "dates, degrees, skills, or metrics. You may rephrase, reorder, and emphasize "
-    "to match the job, and mirror the job's exact skill/keyword terms ONLY where "
-    "they are genuinely true of the applicant. Keep it ATS-safe: plain text, "
-    "standard sections, concise bullet points starting with strong verbs."
+    "You are a senior professional CV writer for the Saudi Arabian job market. "
+    "You rewrite an applicant's real CV so it is maximally compelling for ONE "
+    "specific job — reading like a strong candidate wrote it carefully, never "
+    "like a template or an AI.\n\n"
+    "ABSOLUTE RULES:\n"
+    "- Use ONLY facts present in the applicant data. Never invent employers, "
+    "titles, dates, degrees, certifications, skills, or numbers.\n"
+    "- SELECT, don't dump: keep only the content most relevant to the target "
+    "job; compress or drop the rest. Reorder so the most relevant items come "
+    "first.\n"
+    "- Mirror the job's own terminology only where genuinely true of the "
+    "applicant.\n\n"
+    "THE CV MUST FIT ONE A4 PAGE. Hard limits that make that happen:\n"
+    "- summary: 2–3 lines (max 45 words), positioning the candidate for THIS "
+    "role specifically — not a generic self-description.\n"
+    "- skills: 8–12, most job-relevant first.\n"
+    "- experience: the 3–4 most relevant roles only. 2–4 bullets each, max ~20 "
+    "words per bullet; older or less relevant roles get 1 bullet or none. Each "
+    "bullet: strong verb, one concrete accomplishment or responsibility, "
+    "metrics only when present in the data.\n"
+    "- education: one line per degree. certifications: job-relevant only.\n\n"
+    "STYLE: plain, specific, confident. Vary sentence openings. Forbidden: "
+    "'responsible for', 'results-driven', 'dynamic', 'passionate', 'proven "
+    "track record', 'leverage', and any buzzword filler. ATS-safe plain text "
+    "with standard sections."
 )
 
 # Structured-output schema for the tailored CV + cover letter.
@@ -292,14 +310,15 @@ async def tailor_with_llm(
     if not (want_cv or want_cover_letter):
         return None
     cover_clause = (
-        "a short, natural cover letter (3 short paragraphs) addressed to the "
-        "hiring team"
+        "a natural cover letter: 3 short paragraphs addressed to the hiring "
+        "team, specific to this company and role, grounded in the applicant's "
+        "real background, warm but professional, no clichés"
         if want_cover_letter
         else ""
     )
     cv_clause = (
-        "a tailored CV (summary, skills, experience with bullets, education, "
-        "certifications)"
+        "a ONE-PAGE tailored CV (summary, skills, experience with bullets, "
+        "education, certifications) respecting every hard limit"
         if want_cv
         else ""
     )
@@ -309,7 +328,8 @@ async def tailor_with_llm(
         f"{json.dumps(applicant, ensure_ascii=False)[:12000]}\n\n"
         "TARGET JOB:\n"
         f"{json.dumps(job, ensure_ascii=False)[:8000]}\n\n"
-        f"Produce {ask}. Do not fabricate anything."
+        f"Produce {ask}. Select and rewrite the applicant's real content to fit "
+        "this role — do not fabricate anything, and do not exceed the limits."
     )
     if not want_cv:
         schema = _LETTER_SCHEMA
