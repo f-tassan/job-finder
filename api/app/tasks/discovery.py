@@ -279,6 +279,83 @@ async def _match_user(
     return matched, auto_tracked
 
 
+async def _prune_removed_jobs(session: AsyncSession) -> dict:
+    """Delete postings that are no longer live from the catalog and each user's
+    board. Candidates are the jobs users actually see — those with a
+    `discovered` application (checked first) and those in the ranked feed
+    (`job_matches`) — bounded by `liveness_check_cap` per run.
+
+    A confirmed-removed job is stripped from the feed (job_matches) and from
+    every user's `discovered` column (those applications are deleted). The job
+    row itself is deleted when nothing else references it; if a user already has
+    a non-discovered application for it (submitted/interview/…), the row is kept
+    but flagged closed so it stays out of the feed while preserving that history.
+    Returns {'checked', 'removed', 'by_user': {user_id: discovered_removed}}.
+    """
+    from sqlalchemy import func
+
+    from app.services import job_liveness
+
+    disc_ids = (
+        await session.execute(
+            select(Application.job_id)
+            .where(Application.status == ApplicationStatus.discovered)
+            .distinct()
+        )
+    ).scalars().all()
+    feed_ids = (
+        await session.execute(select(JobMatch.job_id).distinct())
+    ).scalars().all()
+
+    seen: set = set()
+    ordered: list = []
+    for jid in list(disc_ids) + list(feed_ids):
+        if jid not in seen:
+            seen.add(jid)
+            ordered.append(jid)
+    ordered = ordered[: settings.liveness_check_cap]
+
+    checked = removed = 0
+    by_user: dict = {}
+    for jid in ordered:
+        job = await session.get(Job, jid)
+        if job is None or (job.raw or {}).get("closed"):
+            continue
+        checked += 1
+        try:
+            gone = await job_liveness.is_removed(job)
+        except Exception:  # noqa: BLE001 - one bad check shouldn't sink the run
+            logger.exception("liveness check errored for job %s", jid)
+            continue
+        if not gone:
+            continue
+        removed += 1
+        disc_apps = (
+            await session.execute(
+                select(Application).where(
+                    Application.job_id == jid,
+                    Application.status == ApplicationStatus.discovered,
+                )
+            )
+        ).scalars().all()
+        for a in disc_apps:
+            by_user[a.user_id] = by_user.get(a.user_id, 0) + 1
+            await session.delete(a)
+        await session.execute(delete(JobMatch).where(JobMatch.job_id == jid))
+        remaining = await session.scalar(
+            select(func.count())
+            .select_from(Application)
+            .where(Application.job_id == jid)
+        )
+        if not remaining:
+            await session.delete(job)
+        else:
+            job.raw = {**(job.raw or {}), "closed": True}
+    await session.commit()
+    logger.info("prune removed jobs: checked=%s removed=%s", checked, removed)
+    return {"checked": checked, "removed": removed, "by_user": by_user}
+
+
 async def _run_discovery(progress=None) -> dict:
     """`progress(phase, pct, detail)` (optional) reports 0–100% so the UI can show
     a bar. Phases: fetching sources (≤60%), embedding (~65%), ranking (70–98%)."""
@@ -300,6 +377,11 @@ async def _run_discovery(progress=None) -> dict:
             session,
             report=lambda f, d="": emit("Embedding new jobs", 62 + 6 * f, d),
         )
+        # Prune postings that are no longer live BEFORE matching, so removed jobs
+        # leave both the discovered column and the ranked feed and aren't
+        # re-surfaced this run.
+        emit("Checking removed postings", 66)
+        pruned = await _prune_removed_jobs(session)
         emit("Loading catalog", 68)
         jobs = (
             (await session.execute(select(Job).where(Job.embedding.is_not(None))))
@@ -309,7 +391,17 @@ async def _run_discovery(progress=None) -> dict:
         users = (await session.execute(select(AppUser))).scalars().all()
         total_matches = 0
         from app.bot import format_job_html, job_buttons
-        from app.services.notify import chat_id_for_user, send_telegram
+        from app.services.notify import chat_id_for_user, notify_user, send_telegram
+
+        # Tell each user whose discovered card(s) vanished because the employer
+        # pulled the posting.
+        for uid, count in (pruned.get("by_user") or {}).items():
+            await notify_user(
+                session,
+                uid,
+                f"🗑 {count} discovered job(s) were removed by the employer and "
+                "taken off your board.",
+            )
 
         n_users = max(len(users), 1)
         for ui, user in enumerate(users):
@@ -353,6 +445,7 @@ async def _run_discovery(progress=None) -> dict:
         "searches": n_searches,
         "fetched": fetched,
         "newly_embedded": embedded,
+        "removed_jobs": pruned.get("removed", 0),
         "jobs_total": len(jobs),
         "users": len(users),
         "matches": total_matches,

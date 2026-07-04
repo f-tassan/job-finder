@@ -72,12 +72,14 @@ def job_buttons(app_id: str, *, linkedin: bool = False) -> dict:
     every job message in the chat behaves the same. Documents are generated
     ONLY when their button is tapped — never automatically — so no LLM credits
     are spent on jobs the user doesn't pursue."""
+    # CV generation is temporarily disabled (quality); show only the cover-letter
+    # generator until it's re-enabled via CV_GENERATION_ENABLED.
+    gen_row = [{"text": "✉️ Generate Cover Letter", "callback_data": f"cl:{app_id}"}]
+    if settings.cv_generation_enabled:
+        gen_row.insert(0, {"text": "📄 Generate CV", "callback_data": f"cv:{app_id}"})
     rows = [
         [{"text": "✅ I applied", "callback_data": f"applied:{app_id}"}],
-        [
-            {"text": "📄 Generate CV", "callback_data": f"cv:{app_id}"},
-            {"text": "✉️ Generate Cover Letter", "callback_data": f"cl:{app_id}"},
-        ],
+        gen_row,
         [{"text": "🙈 Skip", "callback_data": f"skip:{app_id}"}],
     ]
     if linkedin:
@@ -469,10 +471,13 @@ class Bot:
             if action in ("cv", "cl", "both"):
                 from app.tasks.tailor import tailor_application
 
-                make_cv = action in ("cv", "both")
+                make_cv = action in ("cv", "both") and settings.cv_generation_enabled
                 make_letter = action in ("cl", "both")
+                if not (make_cv or make_letter):
+                    await ack("🚫 CV generation is temporarily disabled.")
+                    return
                 tailor_application.delay(str(app.id), make_cv, make_letter)
-                await ack("Generating — your PDFs will arrive here shortly ⏳")
+                await ack("Generating — your PDF will arrive here shortly ⏳")
 
             elif action == "applied":
                 app.status = ApplicationStatus.submitted

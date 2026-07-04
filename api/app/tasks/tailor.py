@@ -50,6 +50,11 @@ def _doc_name(kind: str, job: Job) -> str:
 
 
 async def _tailor(app_id: uuid.UUID, make_cv: bool, make_letter: bool) -> dict:
+    # CV generation is temporarily disabled globally; never produce a CV even if
+    # an old queued task or caller asked for one.
+    make_cv = make_cv and settings.cv_generation_enabled
+    if not (make_cv or make_letter):
+        return {"skipped": "nothing to generate (CV disabled)"}
     async with SessionLocal() as session:
         app = await session.get(Application, app_id)
         if app is None:

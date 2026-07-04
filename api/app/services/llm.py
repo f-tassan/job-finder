@@ -310,9 +310,14 @@ async def tailor_with_llm(
     if not (want_cv or want_cover_letter):
         return None
     cover_clause = (
-        "a natural cover letter: 3 short paragraphs addressed to the hiring "
-        "team, specific to this company and role, grounded in the applicant's "
-        "real background, warm but professional, no clichés"
+        "a full one-page cover letter (about 320-420 words, 4-5 paragraphs) "
+        "addressed to the hiring team: an opening that states the role and a "
+        "genuine hook; two body paragraphs citing SPECIFIC, real achievements "
+        "and skills from the applicant data that match this job's needs; a "
+        "short paragraph on why this company/role specifically; and a confident "
+        "closing. Specific to this company and role, grounded only in the "
+        "applicant's real background, warm but professional, varied sentences, "
+        "no clichés or filler. It should fill a page, not read as padded"
         if want_cover_letter
         else ""
     )

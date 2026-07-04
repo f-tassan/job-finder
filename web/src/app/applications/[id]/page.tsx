@@ -38,6 +38,13 @@ export default function ApplicationDetailPage() {
     queryFn: () => apiGet<ApplicationDetail>(`/applications/${id}`),
   });
 
+  // Feature flags (e.g. CV generation temporarily off).
+  const { data: config } = useQuery({
+    queryKey: ["config"],
+    queryFn: () => apiGet<{ cv_generation_enabled: boolean }>("/config"),
+  });
+  const cvEnabled = config?.cv_generation_enabled ?? false;
+
   useEffect(() => {
     if (data) setNotes(data.notes || "");
   }, [data]);
@@ -270,17 +277,23 @@ export default function ApplicationDetailPage() {
               )}
             </h2>
             <div className="flex items-center gap-2">
-              <button
-                onClick={() => tailor.mutate({ cv: true, cover_letter: false })}
-                disabled={tailor.isPending}
-                className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
-              >
-                {tailor.isPending
-                  ? "Queuing…"
-                  : cvDocs.length > 0
-                    ? "🔄 Regenerate CV"
-                    : "Tailor CV"}
-              </button>
+              {cvEnabled ? (
+                <button
+                  onClick={() => tailor.mutate({ cv: true, cover_letter: false })}
+                  disabled={tailor.isPending}
+                  className="rounded-lg bg-indigo-600 px-3 py-1.5 text-sm font-medium text-white hover:bg-indigo-500 disabled:opacity-50"
+                >
+                  {tailor.isPending
+                    ? "Queuing…"
+                    : cvDocs.length > 0
+                      ? "🔄 Regenerate CV"
+                      : "Tailor CV"}
+                </button>
+              ) : (
+                <span className="rounded-lg border border-amber-700/50 bg-amber-500/10 px-3 py-1.5 text-xs text-amber-300">
+                  Temporarily disabled
+                </span>
+              )}
               {selectedCv?.has_pdf && (
                 <button
                   onClick={() => downloadDoc(selectedCv)}
@@ -303,12 +316,18 @@ export default function ApplicationDetailPage() {
               title="Tailored CV"
               className="h-[520px] w-full rounded-lg border border-slate-800 bg-white"
             />
-          ) : (
+          ) : cvEnabled ? (
             <p className="text-sm text-slate-500">
               No tailored CV yet. Generate one here (or tap 📄 Generate CV on the
               job’s Telegram message) — it’s tailored to this job from your
               answer bank, saved here, and sent to you on Telegram. Every version
               you generate is kept.
+            </p>
+          ) : (
+            <p className="text-sm text-slate-500">
+              Tailored CV generation is temporarily turned off while we improve
+              its quality. Cover letters are unaffected. Any versions you already
+              generated remain available above.
             </p>
           )}
         </div>

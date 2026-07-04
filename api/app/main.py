@@ -50,6 +50,15 @@ async def health() -> dict[str, str]:
     return {"status": "ok"}
 
 
+@app.get("/config")
+async def public_config() -> dict[str, bool]:
+    """Feature flags the web UI needs to render correctly (e.g. whether CV
+    generation is currently enabled). Non-sensitive."""
+    from app.config import settings as _s
+
+    return {"cv_generation_enabled": _s.cv_generation_enabled}
+
+
 app.include_router(auth.router)
 app.include_router(users.router)
 app.include_router(profile.router)

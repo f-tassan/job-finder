@@ -55,6 +55,16 @@ class Settings(BaseSettings):
     # Max per-job Telegram messages (with action buttons) per user per discovery
     # run; anything beyond is summarized so the chat isn't flooded.
     telegram_jobs_per_run: int = 8
+    # Max liveness (still-posted?) HTTP checks per discovery run. Bounds the
+    # extra runtime the removed-job pruning adds; discovered-column jobs are
+    # checked first, then the ranked feed.
+    liveness_check_cap: int = 60
+
+    # --- Document generation toggles ---
+    # Temporarily off: the tailored-CV output quality isn't good enough yet, so
+    # the Generate/Regenerate CV buttons are hidden and CV requests are refused
+    # everywhere. Cover letters are unaffected. Flip back to True to re-enable.
+    cv_generation_enabled: bool = False
 
     # --- LinkedIn discovery hardening (avoid rate-limit / blocking) ---
     # Comma-separated proxy URLs (e.g. "http://user:pass@host:port,http://..."),

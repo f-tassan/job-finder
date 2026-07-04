@@ -170,13 +170,19 @@ async def tailor_application(
 ) -> dict:
     """Enqueue document generation for this application: the tailored CV, the
     cover letter, or both. The PDFs land here (job page) and on Telegram."""
+    from app.config import settings as app_settings
+
     await _owned(session, user.id, app_id)
-    make_cv = body.cv if body else True
+    make_cv = (body.cv if body else True) and app_settings.cv_generation_enabled
     make_letter = body.cover_letter if body else True
     if not (make_cv or make_letter):
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Pick at least one of cv / cover_letter",
+            detail=(
+                "CV generation is temporarily disabled — request a cover letter."
+                if (body and body.cv)
+                else "Pick at least one of cv / cover_letter"
+            ),
         )
     from app.tasks.tailor import tailor_application as task
 
