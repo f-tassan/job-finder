@@ -152,17 +152,27 @@ class Bot:
 
     async def run(self) -> None:
         logger.info("bot: long-polling for updates")
+        self._tasks: set[asyncio.Task] = set()
         while True:
             offset = await self.redis.get(_OFFSET_KEY)
             params: dict = {
                 "timeout": 50,
-                "allowed_updates": ["message", "callback_query"],
+                # MUST be a JSON-serialized array — Telegram ignores any other
+                # encoding and keeps the previously stored preference, which
+                # would silently drop callback_query updates (button taps).
+                "allowed_updates": json.dumps(["message", "callback_query"]),
             }
             if offset:
                 params["offset"] = int(offset)
             try:
                 resp = await self.http.get(f"{self.base}/getUpdates", params=params)
-                updates = resp.json().get("result", []) if resp.status_code == 200 else []
+                if resp.status_code != 200:
+                    logger.warning(
+                        "getUpdates -> %s %s", resp.status_code, resp.text[:200]
+                    )
+                    await asyncio.sleep(3)
+                    continue
+                updates = resp.json().get("result", [])
             except Exception:  # noqa: BLE001 - network blip; retry
                 logger.exception("getUpdates failed")
                 await asyncio.sleep(5)
@@ -170,8 +180,11 @@ class Bot:
             for u in updates:
                 await self.redis.set(_OFFSET_KEY, u["update_id"] + 1)
                 # Handle concurrently so a slow handler (LLM chat, LinkedIn
-                # resolve) doesn't block button taps from other users.
-                asyncio.create_task(self._safe_handle(u))
+                # resolve) doesn't block button taps from other users. Keep a
+                # reference: bare fire-and-forget tasks can be GC'd mid-run.
+                task = asyncio.create_task(self._safe_handle(u))
+                self._tasks.add(task)
+                task.add_done_callback(self._tasks.discard)
 
     async def _safe_handle(self, update: dict) -> None:
         try:
@@ -214,6 +227,7 @@ class Bot:
         text = (msg.get("text") or "").strip()
         if not chat_id or not text:
             return
+        logger.info("message from chat %s: %.60s", chat_id, text)
         async with SessionLocal() as session:
             user = await self._user_for_chat(session, chat_id)
             if user is None:
@@ -404,6 +418,7 @@ class Bot:
         msg = cb.get("message") or {}
         chat_id = str((msg.get("chat") or {}).get("id") or "")
         action, _, app_id = data.partition(":")
+        logger.info("callback %r from chat %s", data, chat_id)
 
         async def ack(text: str | None = None) -> None:
             payload: dict = {"callback_query_id": cb_id}
