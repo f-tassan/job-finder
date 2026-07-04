@@ -50,6 +50,10 @@ class Settings(BaseSettings):
     # --- Discovery / relevance (Phase 2) ---
     match_threshold: float = 0.25  # min cosine to be a candidate (recall)
     auto_track_threshold: float = 0.55  # auto-create a `discovered` application
+    # Default relevance floor for auto-APPLY (pre-fill high matches). Single source
+    # of truth shared by discovery and the settings API so the UI and the pipeline
+    # agree when the user hasn't set a custom threshold.
+    auto_apply_threshold_default: float = 0.6
     rerank_top_k: int = 40  # top cosine candidates to LLM re-rank per user
     discovery_interval_minutes: int = 360  # Celery Beat cadence
 
@@ -70,20 +74,34 @@ class Settings(BaseSettings):
     imap_folder: str = "INBOX"
 
     # --- LLM provider (CV parsing + tailoring) ---
-    # "auto" picks OpenAI if OPENAI_API_KEY is set, else Anthropic if its key is
-    # set, else neither (deterministic fallback). Force with "openai"/"anthropic".
-    llm_provider: str = "auto"
+    # This deployment uses OpenAI. "openai" forces the OpenAI path; "auto" would
+    # pick OpenAI when OPENAI_API_KEY is set, else Anthropic; "anthropic" forces
+    # Claude. With no key configured the app still works (deterministic fallback).
+    llm_provider: str = "openai"
     anthropic_api_key: str | None = None
     openai_api_key: str | None = None
     openai_tailor_model: str = "gpt-4o"
     openai_parse_model: str = "gpt-4o-mini"
 
-    # --- Agent applier (browser-use LLM-driven form fill, opt-in fallback) ---
-    # When true, the prefill task uses an LLM browser agent to fill forms the
-    # deterministic appliers leave mostly empty. Never submits. Costs many LLM
-    # calls per form, so it's off by default and used only as a fallback.
-    agent_applier_enabled: bool = False
+    # --- Agent applier (browser-use LLM-driven form fill) ---
+    # The LLM browser agent reads a page and fills it like a human, so it
+    # generalizes to arbitrary company career sites the deterministic ATS adapters
+    # don't cover. On auto-submit it is the PRIMARY path for unknown/long-tail
+    # platforms (no dedicated adapter matched) and a fallback for known ATS whose
+    # deterministic fill came up short. It only runs on the explicit, user-triggered
+    # auto-submit (never in bulk pre-fill). `agent_applier_model` is an OpenAI
+    # vision model (browser-use needs vision); it uses OPENAI_API_KEY.
+    agent_applier_enabled: bool = True
     agent_applier_model: str = "gpt-4.1"
+
+    # --- Universal portal login ---
+    # A single shared login used for ANY employer ATS that has no tenant-specific
+    # credential stored. When a form is behind a sign-in / create-account wall, the
+    # agent signs in with it — or registers a new account with it if none exists.
+    # Set here via env, OR store a host="*" entry in Settings → Employer portal
+    # logins (the DB entry, being encrypted + per-user, takes precedence).
+    portal_universal_username: str | None = None
+    portal_universal_password: str | None = None
 
     # --- External services (later phases) ---
     telegram_bot_token: str | None = None

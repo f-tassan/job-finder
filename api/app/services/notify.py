@@ -64,6 +64,41 @@ async def notify_user(session: AsyncSession, user_id: uuid.UUID, text: str) -> b
     return await send_telegram(chat_id, text)
 
 
+async def notify_user_throttled(
+    session: AsyncSession,
+    user_id: uuid.UUID,
+    text: str,
+    *,
+    key: str,
+    ttl_seconds: int,
+) -> bool:
+    """Like `notify_user`, but sends at most once per `ttl_seconds` for a given
+    `key` (e.g. an expired-cookie nudge). The last-sent timestamp is persisted in
+    the user's notification prefs so a burst of failing jobs yields one message,
+    not dozens. Best-effort: storage failures fall back to sending."""
+    bank = (
+        await session.execute(
+            select(AnswerBank).where(AnswerBank.user_id == user_id)
+        )
+    ).scalar_one_or_none()
+    if bank is None:
+        return False
+    prefs = dict(bank.notifications or {})
+    throttle = dict(prefs.get("_throttle") or {})
+    now = int(time.time())
+    last = throttle.get(key)
+    if isinstance(last, (int, float)) and now - last < ttl_seconds:
+        return False
+    throttle[key] = now
+    prefs["_throttle"] = throttle
+    bank.notifications = prefs  # reassign for JSONB change-tracking
+    try:
+        await session.commit()
+    except Exception:  # noqa: BLE001 - don't let bookkeeping block the nudge
+        await session.rollback()
+    return await notify_user(session, user_id, text)
+
+
 # --- Inbound: wait for a one-time code the user sends back over Telegram --------
 
 # A verification code from the user's reply. Codes contain a digit, so we require
@@ -145,6 +180,41 @@ async def wait_for_telegram_code(
                     if code:
                         await r.delete(f"tg:inbox:{chat_id}")  # consume
                         return code
+            await asyncio.sleep(2.5)
+    finally:
+        try:
+            await r.aclose()
+        except Exception:  # noqa: BLE001
+            pass
+    return None
+
+
+async def wait_for_telegram_reply(
+    chat_id: str, after_ts: int, timeout: int
+) -> str | None:
+    """Poll Telegram until `chat_id` sends ANY text reply dated >= after_ts, or
+    `timeout` seconds elapse. Returns the raw reply text (not code-parsed) — used to
+    collect free-form missing-info the applicant sends back."""
+    token = settings.telegram_bot_token
+    if not token or not chat_id:
+        return None
+    import redis.asyncio as aioredis
+
+    r = aioredis.from_url(settings.redis_url, decode_responses=True)
+    deadline = time.time() + timeout
+    try:
+        while time.time() < deadline:
+            await _drain_telegram(r, token)
+            for raw in await r.lrange(f"tg:inbox:{chat_id}", 0, -1):
+                try:
+                    m = json.loads(raw)
+                except Exception:  # noqa: BLE001
+                    continue
+                if int(m.get("date", 0)) >= after_ts:
+                    text = (m.get("text") or "").strip()
+                    if text:
+                        await r.delete(f"tg:inbox:{chat_id}")  # consume
+                        return text
             await asyncio.sleep(2.5)
     finally:
         try:

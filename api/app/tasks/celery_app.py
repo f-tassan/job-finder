@@ -16,6 +16,10 @@ celery_app.conf.update(
     task_default_queue="default",
     task_acks_late=True,
     worker_prefetch_multiplier=1,
+    # Emit a STARTED state when a worker picks a task up, so the UI can tell
+    # "queued behind a busy worker" (PENDING) apart from "actually running"
+    # (STARTED) instead of showing a dead 0% for both.
+    task_track_started=True,
     timezone="UTC",
     beat_schedule={
         "discovery-periodic": {

@@ -2,8 +2,7 @@
 FROM python:3.12-slim
 
 ENV PYTHONUNBUFFERED=1 \
-    PYTHONDONTWRITEBYTECODE=1 \
-    PIP_NO_CACHE_DIR=1
+    PYTHONDONTWRITEBYTECODE=1
 
 # procps: pgrep for the beat healthcheck. curl: healthchecks.
 # The libpango/cairo/gdk-pixbuf stack + fonts are WeasyPrint's native deps for
@@ -18,12 +17,21 @@ RUN apt-get update \
 
 WORKDIR /app
 
+# CPU-only torch (avoids the multi-GB CUDA wheel) on its OWN layer, BEFORE copying
+# the app source — so editing code never busts this layer and re-downloads the
+# 192 MB wheel. A BuildKit pip cache mount + retries make the download resumable
+# and survivable on a flaky/throttled connection.
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --upgrade pip \
+    && pip install --retries 10 --timeout 180 \
+        --index-url https://download.pytorch.org/whl/cpu torch
+
+# App + ML extra (sentence-transformers, etc.). Needs the source, so it follows
+# the copy — but the cache mount keeps already-downloaded wheels, so a rebuild
+# after a code edit reinstalls from cache without re-downloading.
 COPY . .
-# CPU-only torch (avoids the multi-GB CUDA wheel), then the app + ML extra for
-# local sentence-transformers embeddings.
-RUN pip install --upgrade pip \
-    && pip install --index-url https://download.pytorch.org/whl/cpu torch \
-    && pip install ".[ml]" \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    pip install --retries 10 --timeout 180 ".[ml]" \
     && chmod +x entrypoint.sh
 
 EXPOSE 8000

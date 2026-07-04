@@ -25,17 +25,28 @@ async def credentials_for_url(
     host = tenant_key(url)
     if not host:
         return None
-    row = (
-        await session.execute(
-            select(PortalCredential).where(
-                PortalCredential.user_id == user_id,
-                PortalCredential.host == host,
+    # Prefer a tenant-specific login, then a universal one: a stored host="*" entry
+    # (managed in the UI), then the env-configured shared login. The universal login
+    # lets the agent sign in / register on any portal with no dedicated credential.
+    for h in (host, "*"):
+        row = (
+            await session.execute(
+                select(PortalCredential).where(
+                    PortalCredential.user_id == user_id,
+                    PortalCredential.host == h,
+                )
             )
-        )
-    ).scalar_one_or_none()
-    if row is None:
-        return None
-    password = decrypt(row.secret)
-    if not password:
-        return None
-    return {"username": row.username, "password": password}
+        ).scalar_one_or_none()
+        if row is not None:
+            password = decrypt(row.secret)
+            if password:
+                return {"username": row.username, "password": password}
+
+    from app.config import settings
+
+    if settings.portal_universal_username and settings.portal_universal_password:
+        return {
+            "username": settings.portal_universal_username,
+            "password": settings.portal_universal_password,
+        }
+    return None

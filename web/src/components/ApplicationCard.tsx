@@ -43,6 +43,11 @@ export function ApplicationCard({
       <div className="flex items-start justify-between gap-2">
         <div {...listeners} {...attributes} className="cursor-grab">
           <p className="text-sm font-medium leading-tight">{app.job.title}</p>
+          {app.job.apply_kind === "easyapply" && (
+            <span className="mt-1 inline-block rounded bg-sky-500/15 px-1.5 py-0.5 text-[10px] font-semibold uppercase tracking-wide text-sky-300">
+              Easy Apply
+            </span>
+          )}
           {app.job.company && (
             <p className="text-xs text-slate-400">{app.job.company}</p>
           )}

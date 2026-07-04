@@ -72,6 +72,125 @@ _VERIFY_MARKERS = (
     "check your email",
 )
 
+# Text that signals the posting is gone — nothing can be submitted. Routes the app
+# to the closed outcome instead of a misleading "couldn't confirm".
+_CLOSED_MARKERS = (
+    "no longer available",
+    "no longer accepting",
+    "not accepting applications",
+    "has been filled",
+    "already been filled",
+    "position is filled",
+    "job not found",
+    "posting is closed",
+    "this job post is no longer",
+    "no longer active",
+    "this position has been filled",
+    "has expired",
+)
+
+
+async def _agent_submit(
+    session, app, job, values, cv_path, shot_path, target_url, credentials=None
+) -> dict:
+    """Primary/fallback auto-submit for unknown ATS via the LLM browser agent: fills
+    and submits the form, then records a conservative outcome (only marks
+    `submitted` on a real confirmation). Routes a closed posting out of the queue and
+    signs in / registers with a stored portal login when a login wall blocks it."""
+    from datetime import datetime, timezone
+
+    from app.appliers.agent import run_agent_prefill
+    from app.services.notify import chat_id_for_user, notify_user
+
+    # Telegram OTP relay: if the user has Telegram configured, hand the agent a tool
+    # to fetch an emailed verification code from them when a portal demands one.
+    chat_id = await chat_id_for_user(session, app.user_id)
+
+    # Include the answers the human reviewed/completed (salary, "why this company",
+    # availability) plus the role/company, so the agent can fill gaps and ground a
+    # genuine motivation. Reviewed answers win on key clashes.
+    candidate = {**values, **(app.prefilled_answers or {})}
+    candidate.setdefault("applying_for_role", job.title or "")
+    if job.company:
+        candidate.setdefault("applying_at_company", job.company)
+    res = await run_agent_prefill(
+        job_url=target_url,
+        candidate=candidate,
+        cv_path=cv_path,
+        shot_path=shot_path,
+        do_submit=True,
+        credentials=credentials,
+        chat_id=chat_id,
+        job_title=job.title or "",
+        otp_wait_seconds=settings.submit_otp_wait_seconds,
+    )
+    err = res.get("error")
+    submitted = bool(res.get("submitted"))
+    closed = bool(res.get("closed"))
+    if res.get("screenshot_path"):
+        app.screenshot_path = res["screenshot_path"]
+
+    # Closed/removed posting: delete the application entirely (user preference — no
+    # clutter, not even Withdrawn) and flag the shared job so discovery won't re-add it.
+    if closed and not submitted:
+        app_id = str(app.id)
+        job.raw = {**(job.raw or {}), "closed": True}
+        msg = (
+            f"🗑️ {job.title}"
+            + (f" at {job.company}" if job.company else "")
+            + " is closed (no longer accepting applications) — removed from your list."
+        )
+        await session.delete(app)
+        await session.commit()
+        await notify_user(session, app.user_id, msg)
+        return {"application_id": app_id, "closed": True, "deleted": True, "agent": True}
+
+    if submitted:
+        app.status = ApplicationStatus.submitted
+        if app.submitted_at is None:
+            app.submitted_at = datetime.now(timezone.utc)
+        msg = (
+            f"✅ Auto-submitted (AI agent): {job.title}"
+            + (f" at {job.company}" if job.company else "")
+            + " — the agent reported a confirmation."
+        )
+    else:
+        note = (
+            "⚠ The AI agent "
+            + (f"hit an error: {err}" if err else "couldn't confirm a submission")
+            + ". Open the posting to finish it yourself (a screenshot of where it "
+            "got to is attached)."
+        )
+        app.status = ApplicationStatus.needs_attention
+        app.missing_fields = [note] + [
+            m for m in (app.missing_fields or []) if m != note
+        ]
+        msg = (
+            f"⚠️ {job.title}: AI auto-submit couldn't confirm it went through — "
+            "moved to Needs Fixes. Open the posting to check/finish it."
+        )
+    session.add(
+        ApplicationEvent(
+            application_id=app.id,
+            type="submitted_auto_agent" if submitted else "submit_attempt_agent",
+            payload={
+                "applier": "agent",
+                "submitted": submitted,
+                "error": err,
+                "summary": (res.get("summary") or "")[:500],
+            },
+        )
+    )
+    await session.commit()
+    await notify_user(session, app.user_id, msg)
+    return {
+        "application_id": str(app.id),
+        "confirmed": submitted,
+        "closed": closed,
+        "agent": True,
+        "error": err,
+    }
+
 
 async def _submit(app_id: uuid.UUID) -> dict:
     async with SessionLocal() as session:
@@ -79,9 +198,62 @@ async def _submit(app_id: uuid.UUID) -> dict:
         if app is None:
             return {"error": "application not found"}
         job = await session.get(Job, app.job_id)
-        url = (job.url or "").lower()
-        if any(h in url for h in _BLOCKED_HOSTS):
-            return {"error": "auto-submit is not allowed for this portal"}
+
+        # Anti-throttle: refuse to re-hit the same posting within a short window
+        # (stops retry-storms / accidental double-submits that look like a bot).
+        from app.services.throttle import on_cooldown
+
+        if on_cooldown(f"submit:{app_id}", seconds=120):
+            from app.services.notify import notify_user
+
+            await notify_user(
+                session,
+                app.user_id,
+                f"⏳ {job.title}: auto-submit was just attempted — waiting a bit "
+                "before trying the same posting again (avoids looking like a bot). "
+                "Give it ~2 minutes, then retry.",
+            )
+            return {"application_id": str(app_id), "cooldown": True}
+
+        # Resolve where the form actually lives. For a LinkedIn redirect job this
+        # turns the linkedin.com URL into the employer's real ATS URL (using the
+        # user's own LinkedIn cookie); for Easy Apply / unresolved it returns no
+        # URL and we route the application back to the human with an explanation.
+        from app.services.linkedin_resolve import resolve_apply_target
+
+        target_url, kind, note = await resolve_apply_target(session, app.user_id, job)
+        if target_url is None or any(
+            h in target_url.lower() for h in _BLOCKED_HOSTS
+        ):
+            reason = note or "auto-submit is not allowed for this portal"
+            app.status = ApplicationStatus.needs_attention
+            app.missing_fields = [reason] + [
+                m for m in (app.missing_fields or []) if m != reason
+            ]
+            session.add(
+                ApplicationEvent(
+                    application_id=app.id,
+                    type="submit_blocked",
+                    payload={"kind": kind, "reason": reason},
+                )
+            )
+            await session.commit()
+            if kind == "auth":
+                # Expired LinkedIn cookie — nudge at most once an hour, not per job.
+                from app.services.notify import notify_user_throttled
+
+                await notify_user_throttled(
+                    session,
+                    app.user_id,
+                    reason,
+                    key="linkedin_cookie_expired",
+                    ttl_seconds=3600,
+                )
+            else:
+                from app.services.notify import notify_user
+
+                await notify_user(session, app.user_id, f"{job.title}: {reason}")
+            return {"application_id": str(app_id), "kind": kind, "blocked": True}
 
         bank = (
             await session.execute(
@@ -89,11 +261,11 @@ async def _submit(app_id: uuid.UUID) -> dict:
             )
         ).scalar_one_or_none()
         values = candidate_values((bank.data if bank else {}) or {})
-        applier = get_applier(job.source, job.url)
+        applier = get_applier(job.source, target_url)
 
         from app.services.credentials import credentials_for_url
 
-        credentials = await credentials_for_url(session, app.user_id, job.url)
+        credentials = await credentials_for_url(session, app.user_id, target_url)
 
         # CV to attach: the application's tailored CV if present, else the user's
         # default CV version. Shared `files` volume → readable by the worker.
@@ -115,31 +287,49 @@ async def _submit(app_id: uuid.UUID) -> dict:
         )
         Path(shot_path).parent.mkdir(parents=True, exist_ok=True)
 
+        # Unknown/long-tail platform: no dedicated ATS adapter matched (the generic
+        # heuristic sweep barely generalizes), so drive the whole fill-and-submit
+        # with the LLM browser agent — it reads the page like a human and works on
+        # arbitrary company career sites — instead of clicking Submit on a mostly
+        # empty form. Known ATS keep the fast deterministic path below (with the
+        # agent only as a fallback). _agent_submit attaches the CV and re-applies
+        # the answers the human reviewed (app.prefilled_answers).
+        if applier.name == "generic" and settings.agent_applier_enabled:
+            return await _agent_submit(
+                session, app, job, values, cv_path, shot_path, target_url,
+                credentials=credentials,
+            )
+
         prefill = {"filled": {}, "missing": []}
         cv_attached = False
         clicked = False
         confirmed = False
+        closed = False
         needs_verification = False
         otp_asked = False
         otp_code_received = False
         submit_diag: str | None = None
         error: str | None = None
+        use_agent = False
 
         from playwright.async_api import async_playwright
 
         async with async_playwright() as p:
-            browser = await p.chromium.launch(args=["--no-sandbox"])
+            from app.services.throttle import (
+                LAUNCH_ARGS,
+                new_human_context,
+                pace_host,
+            )
+
+            browser = await p.chromium.launch(args=LAUNCH_ARGS)
             try:
-                context = await browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                    )
-                )
+                context = await new_human_context(browser)
                 page = await context.new_page()
                 try:
+                    # Polite, human-paced access to this employer's host.
+                    await pace_host(target_url)
                     await page.goto(
-                        job.url, wait_until="domcontentloaded", timeout=45000
+                        target_url, wait_until="domcontentloaded", timeout=45000
                     )
                     await page.wait_for_timeout(1200)
                     prefill = await applier.prefill(
@@ -153,11 +343,33 @@ async def _submit(app_id: uuid.UUID) -> dict:
                         overrides=app.prefilled_answers or {},
                     )
                     if prefill.get("needs_credentials"):
-                        error = "portal requires a login that isn't stored"
+                        # Behind a sign-in / create-account wall. If we have a
+                        # (shared) portal login and the agent is on, hand off to the
+                        # agent — it signs in, or registers a new account with it if
+                        # none exists. Otherwise flag it for the human.
+                        if settings.agent_applier_enabled and credentials:
+                            use_agent = True
+                        else:
+                            error = "portal requires a login that isn't stored"
+                    elif (
+                        settings.agent_applier_enabled
+                        and len(prefill.get("filled", {})) < 2
+                    ):
+                        # The deterministic applier barely filled anything — likely
+                        # an obfuscated/SPA form (e.g. Rippling's randomized field
+                        # names). Hand off to the Claude agent to fill + submit
+                        # instead of clicking submit on a near-empty form.
+                        use_agent = True
                     else:
                         if cv_path:
                             cv_attached = await applier.attach_cv(page, cv_path)
                         clicked = await applier.submit(page)
+                        # Deterministic fill worked but the applier couldn't find/
+                        # click the submit button (obfuscated/SPA form like Rippling,
+                        # or required fields it couldn't complete) — escalate to the
+                        # Claude agent to finish and submit instead of failing.
+                        if not clicked and settings.agent_applier_enabled:
+                            use_agent = True
                         # The SPA can take several seconds to transition to the
                         # confirmation or email-verification screen — poll instead
                         # of checking once (a too-early check reads the old form).
@@ -212,10 +424,21 @@ async def _submit(app_id: uuid.UUID) -> dict:
                                             m in body for m in _VERIFY_MARKERS
                                         )
 
+                        # Closed posting: the page says the job is gone. Detect it so
+                        # we route to the closed outcome instead of a misleading
+                        # "clicked but couldn't confirm" / "no submit button".
+                        if not confirmed and not needs_verification:
+                            try:
+                                body = ((await page.content()) or "").lower()
+                                if any(m in body for m in _CLOSED_MARKERS):
+                                    closed = True
+                            except Exception:  # noqa: BLE001
+                                pass
+
                         # Ambiguous: clicked but neither confirmed nor a verification
                         # screen appeared — capture any error/alert text so the card
                         # can tell the human what to check.
-                        if clicked and not confirmed and not needs_verification:
+                        if clicked and not confirmed and not needs_verification and not closed:
                             try:
                                 errs = await page.evaluate(
                                     "()=>[...document.querySelectorAll("
@@ -236,6 +459,31 @@ async def _submit(app_id: uuid.UUID) -> dict:
                     logger.exception("screenshot failed")
             finally:
                 await browser.close()
+
+        # Weak deterministic fill → finish with the LLM agent (its own browser).
+        if use_agent:
+            return await _agent_submit(
+                session, app, job, values, cv_path, shot_path, target_url,
+                credentials=credentials,
+            )
+
+        # Closed/removed posting: delete the application and flag the shared job so
+        # discovery won't re-add it (user preference — remove, don't Withdraw).
+        if closed and not confirmed:
+            from app.services.notify import notify_user
+
+            app_id = str(app.id)
+            job.raw = {**(job.raw or {}), "closed": True}
+            msg = (
+                f"🗑️ {job.title}"
+                + (f" at {job.company}" if job.company else "")
+                + " is closed (no longer accepting applications) — removed from "
+                "your list."
+            )
+            await session.delete(app)
+            await session.commit()
+            await notify_user(session, app.user_id, msg)
+            return {"application_id": app_id, "closed": True, "deleted": True}
 
         app.prefilled_answers = prefill.get("filled", {}) or app.prefilled_answers
         app.missing_fields = prefill.get("missing", []) or app.missing_fields

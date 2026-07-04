@@ -23,6 +23,12 @@ FIELD_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("email", "e-mail"), "email"),
     (("phone", "mobile", "tel", "contact number"), "phone"),
     (("linkedin",), "linkedin"),
+    (("date of birth", "date-of-birth", "birth date", "birthdate", "dob"), "date_of_birth"),
+    (("marital status", "marital"), "marital_status"),
+    (("gender",), "gender"),
+    (("years of experience", "years_of_experience", "total experience"), "years_of_experience"),
+    (("national address",), "national_address"),
+    # "city" AFTER national address so "National Address" doesn't grab it.
     (("city", "location", "where are you", "current location"), "city"),
     (("nationality",), "nationality"),
     (("national id", "national-id", "id number"), "national_id"),
@@ -32,21 +38,18 @@ FIELD_PATTERNS: list[tuple[tuple[str, ...], str]] = [
     (("country",), "country"),
 ]
 
-# Substrings that mark a field we intentionally leave blank for the human.
-# Strictly the sensitive/free-text fields the user must own: pay and open-ended
-# "why us"/motivation. Known factual fields (e.g. notice period) are filled from
-# the answer bank instead — see FIELD_PATTERNS / candidate_values.
+# Substrings that mark a field we ALWAYS leave blank for the human — pay and
+# legal-status questions the user must own and that can't be drafted from facts.
+# (Open-ended motivation / "why this company" / cover-letter fields are NOT here:
+# the LLM drafts those from the answer bank and flags them "Check" for review.)
 SENSITIVE = (
     "salary",
     "compensation",
     "expected pay",
     "current pay",
-    "why ",
-    "cover letter",
-    "cover_letter",
-    "motivation",
     "sponsor",
     "visa",
+    "sponsorship",
 )
 
 
@@ -70,12 +73,19 @@ def candidate_values(data: dict) -> dict[str, str]:
         "first_name": first,
         "last_name": last,
         "full_name": name,
+        "full_name_ar": data.get("full_name_ar"),
         "email": data.get("email"),
         "phone": data.get("phone"),
         "linkedin": data.get("linkedin"),
         "city": data.get("city"),
+        "national_address": data.get("national_address"),
         "nationality": data.get("nationality"),
         "national_id": data.get("national_id"),
+        "date_of_birth": data.get("date_of_birth"),
+        "gender": data.get("gender"),
+        "marital_status": data.get("marital_status"),
+        "education": data.get("education"),
+        "years_of_experience": data.get("years_of_experience"),
         "notice_period": data.get("notice_period"),
         "country": country,
     }
@@ -132,10 +142,14 @@ def get_applier(source: str | None, url: str | None) -> "Applier":
     from app.appliers import (
         generic,
         greenhouse,
+        icims,
         lever,
         oracle,
+        recruitee,
+        rippling,
         successfactors,
         workday,
+        zenats,
     )
 
     u = (url or "").lower()
@@ -144,6 +158,14 @@ def get_applier(source: str | None, url: str | None) -> "Applier":
         return greenhouse.GreenhouseApplier()
     if s == "lever" or "lever.co" in u:
         return lever.LeverApplier()
+    if s == "zenats" or "zenats.com" in u:
+        return zenats.ZenAtsApplier()
+    if s == "icims" or "icims.com" in u:
+        return icims.ICIMSApplier()
+    if s == "rippling" or "rippling.com" in u:
+        return rippling.RipplingApplier()
+    if s == "recruitee" or "recruitee.com" in u:
+        return recruitee.RecruiteeApplier()
     if s == "workday" or "myworkdayjobs.com" in u or ".workday.com" in u:
         return workday.WorkdayApplier()
     if (

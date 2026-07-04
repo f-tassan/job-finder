@@ -15,12 +15,12 @@ import asyncio
 import logging
 from datetime import datetime, timezone
 
-from sqlalchemy import delete, select
+from sqlalchemy import case, delete, select
 from sqlalchemy.dialects.postgresql import insert as pg_insert
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from app.config import settings
-from app.connectors.base import get_connector
+from app.connectors.base import clean_field, get_connector
 from app.db import SessionLocal
 from app.models import (
     AnswerBank,
@@ -41,8 +41,9 @@ logger = logging.getLogger(__name__)
 async def _ingest(session: AsyncSession, on_search=None) -> tuple[int, int]:
     """Run all enabled searches; upsert normalized jobs. Returns (searches, fetched).
 
-    `on_search(i, total, name)` is called before each search so the caller can
-    report progress (fetching a source is the slow, network-bound phase)."""
+    `on_search(i, total, name)` is called before each search AND after it
+    finishes, so the caller can advance a progress bar through the slow,
+    network-bound fetch phase instead of jumping only once per source."""
     searches = (
         (await session.execute(select(SavedSearch).where(SavedSearch.enabled)))
         .scalars()
@@ -64,55 +65,91 @@ async def _ingest(session: AsyncSession, on_search=None) -> tuple[int, int]:
         for j in jobs:
             if not j.get("title") or not j.get("url"):
                 continue
+            # Decode HTML entities in display fields (e.g. "Sales &amp; Marketing"
+            # -> "Sales & Marketing") regardless of whether the source is HTML or
+            # a JSON API, so titles read naturally everywhere they're shown.
+            title = clean_field(j["title"])
+            company = clean_field(j.get("company"))
+            location = clean_field(j.get("location"))
+            description = j.get("description")
+            # Only invalidate the cached embedding when the text we actually embed
+            # (title/company/location/description) changed. Most jobs reappear in
+            # every discovery run, so unconditionally nulling the embedding would
+            # needlessly re-embed the whole catalog (CPU-bound) each time.
+            embed_unchanged = (
+                (Job.title == title)
+                & Job.company.is_not_distinct_from(company)
+                & Job.location.is_not_distinct_from(location)
+                & Job.description.is_not_distinct_from(description)
+            )
             stmt = (
                 pg_insert(Job)
                 .values(
                     source=j["source"],
                     external_id=j["external_id"],
-                    title=j["title"],
-                    company=j.get("company"),
-                    location=j.get("location"),
+                    title=title,
+                    company=company,
+                    location=location,
                     url=j["url"],
-                    description=j.get("description"),
+                    description=description,
                     raw=j.get("raw"),
                 )
                 .on_conflict_do_update(
                     index_elements=["source", "external_id"],
                     set_={
-                        "title": j["title"],
-                        "company": j.get("company"),
-                        "location": j.get("location"),
+                        "title": title,
+                        "company": company,
+                        "location": location,
                         "url": j["url"],
-                        "description": j.get("description"),
-                        # Reset so the (possibly now-richer) text is re-embedded.
-                        "embedding": None,
+                        "description": description,
+                        # Keep the existing embedding when the embedded text is
+                        # unchanged; reset (re-embed) only when it actually changed.
+                        "embedding": case(
+                            (embed_unchanged, Job.embedding), else_=None
+                        ),
                     },
                 )
             )
             await session.execute(stmt)
             fetched += 1
         s.last_run_at = datetime.now(timezone.utc)
+        # Advance the bar as each source completes (the fetch above is the slow
+        # part), so a run with few-but-slow sources still moves steadily.
+        if on_search:
+            on_search(i + 1, len(searches), s.platform)
     await session.commit()
     return len(searches), fetched
 
 
-async def _embed_new_jobs(session: AsyncSession) -> int:
+async def _embed_new_jobs(session: AsyncSession, report=None) -> int:
     rows = (
         (await session.execute(select(Job).where(Job.embedding.is_(None))))
         .scalars()
         .all()
     )
-    for job in rows:
+    n = len(rows)
+    for idx, job in enumerate(rows):
         text = embeddings.job_text(job.title, job.company, job.location, job.description)
         job.embedding = embeddings.embed(text)
+        # Embedding a large new batch is slow; report through it so the bar moves.
+        if report and n and idx % 20 == 0:
+            report(idx / n, f"{idx}/{n}")
     await session.commit()
-    return len(rows)
+    return n
 
 
 async def _match_user(
-    session: AsyncSession, user: AppUser, jobs: list[Job]
+    session: AsyncSession, user: AppUser, jobs: list[Job], report=None
 ) -> tuple[int, list[str], list[str]]:
-    """Returns (matched, auto_tracked_titles, auto_prepare_app_ids)."""
+    """Returns (matched, auto_tracked_titles, auto_prepare_app_ids).
+
+    `report(frac, detail)` (0..1 within this user's progress slice) is called at
+    the slow points (cosine sweep, LLM re-rank) so the bar keeps moving."""
+
+    def step(frac: float, detail: str = "") -> None:
+        if report:
+            report(frac, detail)
+
     bank = (
         await session.execute(
             select(AnswerBank).where(AnswerBank.user_id == user.id)
@@ -130,7 +167,7 @@ async def _match_user(
     ksa_only = prefs.get("ksa_only", True)
     auto_enabled = prefs.get("auto_apply_enabled", False)
     auto_threshold = float(
-        prefs.get("auto_apply_threshold", settings.auto_track_threshold)
+        prefs.get("auto_apply_threshold", settings.auto_apply_threshold_default)
     )
 
     filter_sets = [
@@ -151,8 +188,13 @@ async def _match_user(
     await session.execute(delete(JobMatch).where(JobMatch.user_id == user.id))
 
     # 1) Recall: cosine over all jobs passing KSA + saved-search hard filters.
+    step(0.1, "filtering")
     candidates: list[tuple[Job, float]] = []
     for job in jobs:
+        # Skip postings a submit attempt found closed/removed — don't re-surface or
+        # re-track them (the application was deleted on purpose).
+        if (job.raw or {}).get("closed"):
+            continue
         # KSA filter:
         #  - jobs WITH a location must be in Saudi Arabia;
         #  - null-location jobs (user-curated company_site careers pages) are kept,
@@ -181,6 +223,7 @@ async def _match_user(
     candidates.sort(key=lambda c: c[1], reverse=True)
 
     # 2) Precision: LLM re-rank the top candidates (uses the configured provider).
+    step(0.6, "AI re-ranking")
     llm_scores: dict[str, float] | None = None
     top = candidates[: settings.rerank_top_k]
     if top:
@@ -198,6 +241,7 @@ async def _match_user(
             ],
         )
 
+    step(0.85, "saving matches")
     matched = 0
     auto_tracked: list[str] = []
     auto_prepare: list[str] = []
@@ -268,7 +312,10 @@ async def _run_discovery(progress=None) -> dict:
             ),
         )
         emit("Embedding new jobs", 62)
-        embedded = await _embed_new_jobs(session)
+        embedded = await _embed_new_jobs(
+            session,
+            report=lambda f, d="": emit("Embedding new jobs", 62 + 6 * f, d),
+        )
         emit("Loading catalog", 68)
         jobs = (
             (await session.execute(select(Job).where(Job.embedding.is_not(None))))
@@ -280,19 +327,36 @@ async def _run_discovery(progress=None) -> dict:
         total_auto_prepared = 0
         from app.services.notify import notify_user
 
+        n_users = max(len(users), 1)
         for ui, user in enumerate(users):
-            emit("Ranking matches", 70 + 28 * ui / max(len(users), 1), user.email)
+            lo = 70 + 28 * ui / n_users
+            hi = 70 + 28 * (ui + 1) / n_users
+
+            def _report(frac: float, detail: str = "", lo=lo, hi=hi, email=user.email):
+                emit("Ranking matches", lo + (hi - lo) * frac, detail or email)
+
+            _report(0.0)
             matched, auto_tracked, auto_prepare = await _match_user(
-                session, user, jobs
+                session, user, jobs, report=_report
             )
             total_matches += matched
-            # Auto-apply: kick off tailor -> pre-fill (-> ready_to_submit). The
-            # human still does the final submit (no auto-submit, CLAUDE.md rule).
-            for app_id in auto_prepare:
-                from app.tasks.tailor import tailor_application
+            # Auto-apply: pre-fill only (-> ready_to_submit). We deliberately do
+            # NOT auto-tailor the CV/cover letter here — that's an LLM token cost
+            # the user opts into per-application via the "Tailor" button. Pre-fill
+            # attaches the user's default CV; the human still does the final submit.
+            from app.services.throttle import on_cooldown
+            from app.tasks.prefill import prefill_application
 
-                tailor_application.delay(app_id, then_prefill=True)
-            total_auto_prepared += len(auto_prepare)
+            queued = 0
+            for app_id in auto_prepare:
+                # Don't double-queue a prefill for the same app across back-to-back
+                # discovery runs (Beat + a manual trigger, or an acks_late redelivery)
+                # before the first prefill has run and moved it out of `discovered`.
+                if on_cooldown(f"autoprefill:{app_id}", seconds=6 * 3600):
+                    continue
+                prefill_application.apply_async(args=[app_id], queue="browser")
+                queued += 1
+            total_auto_prepared += queued
             if auto_tracked:
                 preview = "; ".join(auto_tracked[:3])
                 more = (
@@ -337,4 +401,20 @@ def run_discovery(self) -> dict:
         except Exception:  # noqa: BLE001 - progress is best-effort, never fatal
             pass
 
-    return asyncio.run(_run_discovery(progress))
+    # Single-flight: two concurrent discovery runs deadlock on the jobs upserts
+    # (Beat + a manual trigger, or an acks_late redelivery). Take a short-lived
+    # Redis lock; if another run holds it, skip rather than collide.
+    import redis as _redis
+
+    client = _redis.from_url(settings.celery_broker_url)
+    lock = client.lock("discovery:run:lock", timeout=3600, blocking=False)
+    if not lock.acquire(blocking=False):
+        logger.info("discovery already running; skipping this trigger")
+        return {"skipped": "another discovery run is in progress"}
+    try:
+        return asyncio.run(_run_discovery(progress))
+    finally:
+        try:
+            lock.release()
+        except Exception:  # noqa: BLE001 - lock may have expired; safe to ignore
+            pass

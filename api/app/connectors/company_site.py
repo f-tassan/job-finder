@@ -85,6 +85,10 @@ class CompanySiteConnector(Connector):
                     url = "https://" + url
                 company = filters.get("company") if len(urls) == 1 else None
                 company = company or urlparse(url).netloc
+                # Polite, human-paced access so we don't hammer a careers site.
+                from app.services.throttle import pace_host
+
+                await pace_host(url)
                 try:
                     resp = await client.get(url)
                     resp.raise_for_status()

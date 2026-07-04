@@ -7,6 +7,7 @@ ABC and register it in `get_connector`.
 """
 from __future__ import annotations
 
+import html
 import re
 from abc import ABC, abstractmethod
 from typing import Any
@@ -17,7 +18,18 @@ _TAG_RE = re.compile(r"<[^>]+>")
 def strip_html(text: str | None) -> str | None:
     if not text:
         return text
-    return re.sub(r"[ \t]+", " ", _TAG_RE.sub(" ", text)).strip()
+    # Strip tags first, then decode HTML entities (&amp; -> &, &#x27; -> ', …) so
+    # scraped titles/descriptions read naturally instead of showing raw entities.
+    return re.sub(r"[ \t]+", " ", html.unescape(_TAG_RE.sub(" ", text))).strip()
+
+
+def clean_field(text: str | None) -> str | None:
+    """Normalize a short normalized-job field (title/company/location): decode
+    HTML entities and collapse whitespace. Use for connectors whose source is a
+    JSON API (no tags to strip) so e.g. `R&amp;D Engineer` becomes `R&D Engineer`."""
+    if not text:
+        return text
+    return re.sub(r"\s+", " ", html.unescape(text)).strip() or None
 
 
 class Connector(ABC):

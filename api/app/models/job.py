@@ -34,6 +34,20 @@ class Job(Base):
     embedding: Mapped[list[float] | None] = mapped_column(Vector(384))
     discovered_at: Mapped[datetime] = mapped_column(server_default=func.now())
 
+    @property
+    def apply_kind(self) -> str | None:
+        """Resolved application kind for LinkedIn postings, cached during
+        prefill/submit: 'offsite' (redirects to a real ATS we can submit),
+        'easyapply' (on LinkedIn — never auto-submit), or None (not yet resolved
+        / not a LinkedIn job)."""
+        return (self.raw or {}).get("apply_kind")
+
+    @property
+    def apply_url(self) -> str | None:
+        """The resolved external company application URL, if a LinkedIn redirect
+        was resolved; otherwise None."""
+        return (self.raw or {}).get("apply_url")
+
 
 class JobMatch(Base):
     __tablename__ = "job_matches"

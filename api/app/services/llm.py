@@ -15,9 +15,11 @@ from app.config import settings
 
 logger = logging.getLogger(__name__)
 
-# Anthropic models (pinned per CLAUDE.md §1).
+# Anthropic models — only used when LLM_PROVIDER=anthropic (pluggable fallback;
+# this deployment runs on OpenAI). Sonnet 5 is the tailor model because it (unlike
+# Sonnet 4.6) supports structured outputs, which every JSON-returning call needs.
 _ANTHROPIC_PARSE = "claude-haiku-4-5-20251001"
-_ANTHROPIC_TAILOR = "claude-sonnet-4-6"
+_ANTHROPIC_TAILOR = "claude-sonnet-5"
 
 TAILOR_SYSTEM = (
     "You are an expert CV writer for the Saudi Arabian job market. You tailor an "
@@ -248,17 +250,21 @@ _FIELD_ANSWER_SCHEMA: dict = {
 }
 
 _FIELD_ANSWER_SYSTEM = (
-    "You fill job-application form fields for a candidate using ONLY the facts in "
-    "the provided answer bank. ABSOLUTE RULES:\n"
+    "You fill job-application form fields for a candidate using the facts in the "
+    "provided answer bank. RULES:\n"
     "- Never invent or assume qualifications, employers, titles, dates, numbers, or "
     "experience that are not present in the answer-bank data.\n"
-    "- If a field's answer is not directly supported by the data, return an empty "
-    "string for that field.\n"
-    "- Never answer salary/compensation questions or subjective 'why this "
-    "company/role/motivation' questions — return an empty string for those.\n"
+    "- For FACTUAL fields, if the answer is not directly supported by the data, "
+    "return an empty string.\n"
+    "- For open-ended MOTIVATION / 'why this company/role' / cover-letter prompts, "
+    "you MAY compose a short, genuine answer (2-3 sentences) grounded in the "
+    "candidate's real background (their field, skills, and experience in the answer "
+    "bank) and the company/role named in the field's label — WITHOUT inventing any "
+    "facts, credentials, employers, or metrics.\n"
+    "- NEVER answer salary/compensation questions — return an empty string.\n"
     "- When a field lists options, return EXACTLY one of the given option strings, "
     "or an empty string if none genuinely fits.\n"
-    "- Keep answers concise and strictly factual."
+    "- Keep factual answers concise; keep motivation answers brief and natural."
 )
 
 
@@ -280,8 +286,11 @@ async def answer_form_fields(
         "FORM FIELDS to answer (each has an id, a label, and optionally a closed "
         "set of options):\n"
         f"{json.dumps(fields, ensure_ascii=False)[:6000]}\n\n"
-        "Return an answer for every field id. Use an empty string whenever the "
-        "answer bank does not directly support an answer."
+        "Return an answer for every field id. For factual fields, use an empty "
+        "string whenever the answer bank does not support an answer (never invent "
+        "facts). For motivation / 'why this company' / cover-letter prompts, compose "
+        "a short, genuine answer grounded in the candidate's background and the "
+        "role/company named in the field's label."
     )
     res = await complete_json(
         system=_FIELD_ANSWER_SYSTEM,
@@ -302,17 +311,37 @@ async def answer_form_fields(
     return out
 
 
-async def tailor_with_llm(applicant: dict, job: dict) -> dict | None:
-    """Tailored CV + cover letter, constrained to applicant facts. None if no key."""
+async def tailor_with_llm(
+    applicant: dict, job: dict, *, want_cover_letter: bool = True
+) -> dict | None:
+    """Tailored CV (+ cover letter only if `want_cover_letter`), constrained to
+    applicant facts. None if no key. Skipping the cover letter drops it from both
+    the prompt and the schema, so no tokens are spent generating it."""
+    cover_clause = (
+        " and a short, natural cover letter (3 short paragraphs) addressed to the "
+        "hiring team"
+        if want_cover_letter
+        else ""
+    )
     prompt = (
         "APPLICANT DATA (the only facts you may use):\n"
         f"{json.dumps(applicant, ensure_ascii=False)[:12000]}\n\n"
         "TARGET JOB:\n"
         f"{json.dumps(job, ensure_ascii=False)[:8000]}\n\n"
         "Produce a tailored CV (summary, skills, experience with bullets, "
-        "education, certifications) and a short, natural cover letter (3 short "
-        "paragraphs) addressed to the hiring team. Do not fabricate anything."
+        f"education, certifications){cover_clause}. Do not fabricate anything."
     )
+    schema = TAILOR_SCHEMA
+    if not want_cover_letter:
+        schema = {
+            **TAILOR_SCHEMA,
+            "properties": {
+                k: v
+                for k, v in TAILOR_SCHEMA["properties"].items()
+                if k != "cover_letter"
+            },
+            "required": [r for r in TAILOR_SCHEMA["required"] if r != "cover_letter"],
+        }
     return await complete_json(
-        system=TAILOR_SYSTEM, prompt=prompt, schema=TAILOR_SCHEMA, kind="tailor"
+        system=TAILOR_SYSTEM, prompt=prompt, schema=schema, kind="tailor"
     )

@@ -66,9 +66,11 @@ services:
     build:
       context: ./api
       dockerfile: Dockerfile.browser
-    # concurrency=2 so a submit paused waiting for a Telegram OTP code doesn't
-    # freeze other prefills/submits.
-    command: celery -A app.tasks.celery_app worker -Q browser -l info --concurrency=2
+    # concurrency=1: the LLM browser agent makes many rapid model calls per form, so
+    # running two in parallel trips the OpenAI rate limit (429s) and slows every run.
+    # Serialize browser jobs. (Trade-off: a submit paused waiting for a Telegram OTP
+    # briefly blocks the queue; the OTP wait is short and this is rare.)
+    command: celery -A app.tasks.celery_app worker -Q browser -l info --concurrency=1
     env_file: .env
     depends_on:
       api: { condition: service_healthy }

@@ -180,6 +180,9 @@ def _discover_careers_link(anchors: list[dict], root: str) -> str | None:
 async def _load(page, url: str) -> int | None:
     """Navigate, wait for JS, scroll to trigger lazy lists. Returns HTTP status
     (or None on failure)."""
+    from app.services.throttle import pace_host
+
+    await pace_host(url)  # polite, human-paced access per careers host
     try:
         resp = await page.goto(url, wait_until="domcontentloaded", timeout=30000)
     except Exception:  # noqa: BLE001
@@ -296,14 +299,13 @@ async def _render(urls: list[str], cap: int) -> list[dict]:
     urls = [u if u.startswith("http") else "https://" + u for u in urls][:cap]
     sem = asyncio.Semaphore(3)
 
+    from app.services.throttle import LAUNCH_ARGS, new_human_context
+
     async with async_playwright() as p:
-        browser = await p.chromium.launch(args=["--no-sandbox"])
-        ctx = await browser.new_context(
+        browser = await p.chromium.launch(args=LAUNCH_ARGS)
+        ctx = await new_human_context(
+            browser,
             ignore_https_errors=True,  # some KSA sites have stale/mismatched certs
-            user_agent=(
-                "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like "
-                "Gecko) Chrome/124.0 Safari/537.36"
-            ),
         )
 
         async def _anchors(page) -> list[dict]:

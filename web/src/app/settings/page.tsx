@@ -3,6 +3,7 @@
 import { useMutation, useQuery, useQueryClient } from "@tanstack/react-query";
 import { useEffect, useState } from "react";
 import { AppShell } from "@/components/AppShell";
+import { LinkedInCookieCard } from "@/components/LinkedInCookieCard";
 import { PortalCredentialsCard } from "@/components/PortalCredentialsCard";
 import { apiGet, apiSend } from "@/lib/api";
 import type { DiscoveryPrefs, NotificationSettings } from "@/lib/types";
@@ -207,6 +208,8 @@ export default function SettingsPage() {
           </div>
         </div>
       )}
+
+      <LinkedInCookieCard />
 
       <PortalCredentialsCard />
     </AppShell>

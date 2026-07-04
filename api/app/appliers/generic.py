@@ -13,6 +13,7 @@ from __future__ import annotations
 
 import difflib
 import logging
+import re
 from typing import Any
 
 from app.appliers.base import Applier, PrefillResult, is_sensitive, match_field
@@ -84,15 +85,59 @@ _SUBMIT_SELECTORS = (
 )
 
 
+_IDISH_RE = re.compile(r"^[A-Za-z0-9_-]{6,}$")
+
+
+def _is_idish(c: str) -> bool:
+    """True for a random-id-looking token (e.g. Rippling's '8vOIJwCUxJB' or
+    'ShKbmvIntnq') — meaningless as a display label. Heuristic: a single token
+    (no spaces) that's alphanumeric-random (has digits+letters) or has several
+    scattered internal capitals (unlike normal words / camelCase brands)."""
+    if " " in c or len(c) < 6 or not _IDISH_RE.match(c):
+        return False
+    has_digit = any(ch.isdigit() for ch in c)
+    has_alpha = any(ch.isalpha() for ch in c)
+    internal_caps = sum(1 for ch in c[1:] if ch.isupper())
+    return (has_digit and has_alpha) or internal_caps >= 2
+
+
 def _clean_label(*candidates: str) -> str:
     """A human-readable field name for display: the first non-empty candidate
     (label text > aria-label > placeholder > name), whitespace-collapsed, with the
-    required-marker '*' dropped. Falls back to a prettified field name."""
+    required-marker '*' dropped. Skips obfuscated id-like tokens. Falls back to a
+    prettified field name."""
     for cand in candidates:
         c = " ".join((cand or "").replace("*", " ").split()).strip(" :")
-        if c:
+        if c and not _is_idish(c):
             return c[:80]
     return "field"
+
+
+# Client-side label discovery for custom/obfuscated forms (Rippling, Lever, …):
+# aria-label, native <label>s, aria-labelledby, label[for], then the nearest
+# preceding question-like text in the field's ancestors. Returns "" if none.
+_LABEL_JS = """
+e => {
+  const clean = s => (s||'').replace(/\\s+/g,' ').trim();
+  let t = clean(e.getAttribute('aria-label'));
+  if (t) return t;
+  if (e.labels && e.labels.length) { t = clean(e.labels[0].innerText); if (t) return t; }
+  const lb = e.getAttribute('aria-labelledby');
+  if (lb) { t = clean(lb.split(/\\s+/).map(id => { const n=document.getElementById(id); return n?n.innerText:''; }).join(' ')); if (t) return t; }
+  if (e.id) { try { const sel='label[for=\"'+(window.CSS&&CSS.escape?CSS.escape(e.id):e.id)+'\"]'; const l=document.querySelector(sel); if (l){ t=clean(l.innerText); if(t) return t; } } catch(_){} }
+  let node = e.parentElement;
+  for (let depth=0; depth<5 && node; depth++, node=node.parentElement) {
+    const cands = node.querySelectorAll('label, legend, [class*=label i], [class*=question i], [class*=title i], h1,h2,h3,h4,h5,h6, p, span, div');
+    for (const c of cands) {
+      if (c.contains(e)) continue;
+      if (e.compareDocumentPosition(c) & Node.DOCUMENT_POSITION_FOLLOWING) continue;
+      const txt = clean(c.innerText);
+      if (txt && txt.length>=3 && txt.length<=140 && /[a-zA-Z]/.test(txt) && /[\\s?:]/.test(txt)) return txt;
+    }
+  }
+  return clean(e.getAttribute('placeholder'));
+}
+"""
 
 
 async def _label_blob(root: Any, el: Any) -> tuple[str, str]:
@@ -111,18 +156,12 @@ async def _label_blob(root: Any, el: Any) -> tuple[str, str]:
                 label_text = (await lbl.inner_text()) or ""
         except Exception:  # noqa: BLE001
             pass
-    # Fallback for custom question widgets without a `label[for]` (e.g. Lever's
-    # `cards[uuid][field0]` inputs): use the enclosing question block's text so
-    # the field gets a human label instead of its raw machine name.
+    # Fallback for custom/obfuscated widgets without a `label[for]` (Rippling's
+    # randomized names, Lever's `cards[uuid][field0]`, etc.): discover the visible
+    # question text via aria-labelledby / native labels / nearest preceding text.
     if not label_text:
         try:
-            anc = await el.evaluate(
-                "e => { const q = e.closest("
-                "'.application-question, fieldset, [data-qa=application-question]');"
-                " if (!q) return '';"
-                " const l = q.querySelector('.text, .application-label, legend, label');"
-                " return l ? l.innerText : ''; }"
-            )
+            anc = await el.evaluate(_LABEL_JS)
             # Real question text is mixed-case/has spaces; ignore a bare tag name
             # (the unit-test fake returns e.g. "INPUT" from evaluate()).
             if anc and anc.strip() and not anc.strip().isupper():
@@ -552,6 +591,51 @@ class GenericApplier(Applier):
                 logger.debug("llm field fill skipped", exc_info=True)
                 missing.append(label)
 
+    async def _wait_for_form(self, page: Any) -> None:
+        """Many ATS forms are SPAs that paint seconds after `domcontentloaded`, or
+        hide the form behind an "Apply" button — sweeping too early finds nothing.
+        Settle the network, poll for real inputs, and reveal an Apply control once
+        if the page is still empty. Best-effort; never raises."""
+        try:
+            await page.wait_for_load_state("networkidle", timeout=12000)
+        except Exception:  # noqa: BLE001 - some SPAs poll forever
+            pass
+        for attempt in range(2):
+            try:
+                n = await page.evaluate(
+                    "()=>document.querySelectorAll("
+                    "'input:not([type=hidden]),select,textarea').length"
+                )
+            except Exception:  # noqa: BLE001
+                n = 0
+            if n >= 2:
+                return
+            # Reveal a form hidden behind an Apply button (Rippling/ZenATS-style).
+            for sel in (
+                'button:has-text("Apply now")',
+                'a:has-text("Apply now")',
+                'button:has-text("Apply")',
+                'a:has-text("Apply")',
+                "#apply_button",
+            ):
+                try:
+                    el = await page.query_selector(sel)
+                    if el and await el.is_visible():
+                        await el.click()
+                        await page.wait_for_timeout(1500)
+                        break
+                except Exception:  # noqa: BLE001
+                    pass
+            if attempt == 0:
+                try:
+                    await page.wait_for_selector(
+                        "input:not([type=hidden]),textarea",
+                        timeout=5000,
+                        state="visible",
+                    )
+                except Exception:  # noqa: BLE001
+                    pass
+
     async def prefill(
         self,
         page: Any,
@@ -563,6 +647,7 @@ class GenericApplier(Applier):
         overrides: dict[str, str] | None = None,
     ) -> PrefillResult:
         # Static forms have no account/draft concept; credentials are ignored.
+        await self._wait_for_form(page)
         return await self._sweep(page, values, profile=profile, overrides=overrides)
 
     async def attach_cv(self, page: Any, cv_path: str) -> bool:

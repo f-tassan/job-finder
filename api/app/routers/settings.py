@@ -74,7 +74,9 @@ async def get_discovery_prefs(
     return DiscoveryPrefsOut(
         ksa_only=prefs.get("ksa_only", True),
         auto_apply_enabled=prefs.get("auto_apply_enabled", False),
-        auto_apply_threshold=prefs.get("auto_apply_threshold", 0.6),
+        auto_apply_threshold=prefs.get(
+            "auto_apply_threshold", app_settings.auto_apply_threshold_default
+        ),
     )
 
 

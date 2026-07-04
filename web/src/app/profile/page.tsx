@@ -8,11 +8,23 @@ import { apiGet, apiSend } from "@/lib/api";
 import type { AnswerBank } from "@/lib/types";
 
 // Saudi-national answer bank fields (CLAUDE.md §6) — National ID, no Iqama/visa.
-const FIELDS: { key: string; label: string; type?: string }[] = [
+const FIELDS: {
+  key: string;
+  label: string;
+  type?: string;
+  options?: string[];
+}[] = [
   { key: "full_name_en", label: "Full name (English)" },
   { key: "full_name_ar", label: "Full name (Arabic)" },
   { key: "national_id", label: "National ID" },
   { key: "date_of_birth", label: "Date of birth", type: "date" },
+  { key: "gender", label: "Gender", type: "select", options: ["Male", "Female"] },
+  {
+    key: "marital_status",
+    label: "Marital status",
+    type: "select",
+    options: ["Single", "Married", "Divorced", "Widowed"],
+  },
   { key: "city", label: "City" },
   { key: "national_address", label: "National Address" },
   { key: "nationality", label: "Nationality" },
@@ -102,14 +114,31 @@ export default function ProfilePage() {
             {FIELDS.map((f) => (
               <div key={f.key}>
                 <label className="block text-sm font-medium">{f.label}</label>
-                <input
-                  type={f.type || "text"}
-                  value={values[f.key] ?? ""}
-                  onChange={(e) =>
-                    setValues((v) => ({ ...v, [f.key]: e.target.value }))
-                  }
-                  className="mt-1 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm"
-                />
+                {f.type === "select" ? (
+                  <select
+                    value={values[f.key] ?? ""}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm"
+                  >
+                    <option value="">—</option>
+                    {f.options?.map((o) => (
+                      <option key={o} value={o}>
+                        {o}
+                      </option>
+                    ))}
+                  </select>
+                ) : (
+                  <input
+                    type={f.type || "text"}
+                    value={values[f.key] ?? ""}
+                    onChange={(e) =>
+                      setValues((v) => ({ ...v, [f.key]: e.target.value }))
+                    }
+                    className="mt-1 w-full rounded-lg border border-slate-700 px-3 py-2 text-sm"
+                  />
+                )}
               </div>
             ))}
           </div>

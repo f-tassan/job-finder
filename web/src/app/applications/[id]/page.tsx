@@ -20,6 +20,7 @@ export default function ApplicationDetailPage() {
   const [notes, setNotes] = useState("");
   const [answers, setAnswers] = useState<Record<string, string>>({});
   const [shotUrl, setShotUrl] = useState<string | null>(null);
+  const [cvUrl, setCvUrl] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
 
   const { data, isLoading } = useQuery({
@@ -55,6 +56,29 @@ export default function ApplicationDetailPage() {
       if (revoked) URL.revokeObjectURL(revoked);
     };
   }, [data?.has_screenshot, id]);
+
+  // Load the tailored CV PDF (authed) as an object URL so it can be previewed
+  // inline — lets you eyeball the exact CV that gets attached before submitting.
+  useEffect(() => {
+    if (!data?.has_tailored_cv) {
+      setCvUrl(null);
+      return;
+    }
+    let revoked: string | null = null;
+    fetch(`${API_BASE}/applications/${id}/cv`, {
+      headers: getToken() ? { Authorization: `Bearer ${getToken()}` } : {},
+    })
+      .then((r) => (r.ok ? r.blob() : null))
+      .then((b) => {
+        if (b) {
+          revoked = URL.createObjectURL(b);
+          setCvUrl(revoked);
+        }
+      });
+    return () => {
+      if (revoked) URL.revokeObjectURL(revoked);
+    };
+  }, [data?.has_tailored_cv, id]);
 
   const patch = useMutation({
     mutationFn: (body: Record<string, unknown>) =>
@@ -140,12 +164,47 @@ export default function ApplicationDetailPage() {
     );
   }
 
-  // Auto-submit is allowed only for standalone ATS forms — never LinkedIn/Bayt.
+  // Auto-submit is allowed for standalone ATS forms and for LinkedIn *redirect*
+  // jobs (which resolve to a real ATS on the server). It's blocked only for
+  // Bayt, missing URLs, and LinkedIn **Easy Apply** (which lives on LinkedIn and
+  // must never be auto-submitted). A LinkedIn job we haven't resolved yet still
+  // shows the button — the server resolves on click and routes Easy Apply to a
+  // clear "submit it yourself" message.
   const jobUrl = (data.job.url || "").toLowerCase();
   const autoSubmitBlocked =
     !data.job.url ||
-    jobUrl.includes("linkedin.com") ||
-    jobUrl.includes("bayt.com");
+    jobUrl.includes("bayt.com") ||
+    data.job.apply_kind === "easyapply";
+  // A LinkedIn posting we haven't resolved to an external ATS yet: auto-submit is
+  // still offered (the server resolves the "Apply" redirect on click), but the
+  // confirmation copy needs to say so instead of naming the company's form.
+  const isLinkedInUnresolved =
+    jobUrl.includes("linkedin.com") && data.job.apply_kind !== "offsite";
+
+  // Split the flagged gaps: diagnostic notes (start with ⚠) are shown read-only;
+  // real field gaps become editable inputs whose values are saved into
+  // prefilled_answers under the field's clean label. Auto-submit re-applies those
+  // as overrides — the only way sensitive fields (salary, "why this company") and
+  // other required blanks actually get filled on the form.
+  const SENSITIVE_SUFFIX = " (left blank — sensitive)";
+  const gapNotes = data.missing_fields.filter((m) => m.trim().startsWith("⚠"));
+  const gapLabels = Array.from(
+    new Set(
+      data.missing_fields
+        .filter((m) => !m.trim().startsWith("⚠"))
+        .map((m) =>
+          m.endsWith(SENSITIVE_SUFFIX)
+            ? m.slice(0, -SENSITIVE_SUFFIX.length).trim()
+            : m.trim(),
+        )
+        .filter(Boolean),
+    ),
+  );
+  // Pre-filled answers to show in their own column — exclude gap labels so a value
+  // the user typed into a gap doesn't also appear (and double-render) here.
+  const visiblePrefilled = Object.entries(answers).filter(
+    ([k]) => !gapLabels.includes(k),
+  );
 
   return (
     <AppShell>
@@ -223,7 +282,9 @@ export default function ApplicationDetailPage() {
             onClick={() => {
               if (
                 confirm(
-                  `This will open ${data.job.company || "the company"}'s form on the browser worker, re-fill it from your saved answers, attach your CV, click Submit, and try to confirm. Make sure you've completed the required fields below first. Continue?`,
+                  isLinkedInUnresolved
+                    ? "This is a LinkedIn posting. The worker will follow its Apply redirect to the employer's real form (using your saved LinkedIn cookie), fill it from your saved answers, attach your CV, and submit. If it turns out to be Easy Apply, it stops and asks you to submit on LinkedIn yourself. Continue?"
+                    : `This will open ${data.job.company || "the company"}'s form on the browser worker, re-fill it from your saved answers, attach your CV, click Submit, and try to confirm. Make sure you've completed the required fields below first. Continue?`,
                 )
               )
                 autoSubmit.mutate();
@@ -245,6 +306,33 @@ export default function ApplicationDetailPage() {
           </button>
         )}
       </div>
+      {data.job.apply_kind === "offsite" && data.job.apply_url && (
+        <p className="mt-2 text-xs text-slate-400">
+          LinkedIn redirect → auto-submit fills &amp; submits on the employer&rsquo;s
+          site:{" "}
+          <a
+            href={data.job.apply_url}
+            target="_blank"
+            rel="noreferrer"
+            className="text-blue-400 hover:underline"
+          >
+            {(() => {
+              try {
+                return new URL(data.job.apply_url).hostname;
+              } catch {
+                return "company site";
+              }
+            })()}{" "}
+            ↗
+          </a>
+        </p>
+      )}
+      {data.job.apply_kind === "easyapply" && (
+        <p className="mt-2 text-xs text-amber-300/90">
+          LinkedIn Easy Apply — submit it on LinkedIn yourself (we never
+          auto-submit there), then hit “Mark submitted”.
+        </p>
+      )}
       {msg && <p className="mt-3 text-sm text-indigo-300">{msg}</p>}
 
       {/* Review queue: pre-filled answers, gaps to complete, and the screenshot */}
@@ -279,7 +367,7 @@ export default function ApplicationDetailPage() {
                 </p>
               )}
               <div className="space-y-2">
-                {Object.entries(answers).map(([k, v]) => {
+                {visiblePrefilled.map(([k, v]) => {
                   const needsCheck = data.ai_suggested_fields?.includes(k);
                   return (
                     <div key={k}>
@@ -305,7 +393,12 @@ export default function ApplicationDetailPage() {
                     </div>
                   );
                 })}
-                {Object.keys(answers).length > 0 && (
+                {visiblePrefilled.length === 0 && (
+                  <p className="text-xs text-slate-500">
+                    Nothing pre-filled from your answer bank yet.
+                  </p>
+                )}
+                {visiblePrefilled.length > 0 && (
                   <button
                     onClick={() => saveAnswers.mutate()}
                     className="mt-1 rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
@@ -317,16 +410,44 @@ export default function ApplicationDetailPage() {
             </div>
             <div>
               <h3 className="mb-2 text-xs font-medium text-slate-300">
-                Fields to complete ({data.missing_fields.length})
+                Fields to complete ({gapLabels.length})
               </h3>
-              {data.missing_fields.length > 0 ? (
-                <ul className="list-disc space-y-1 pl-5 text-xs text-amber-300/90">
-                  {data.missing_fields.map((f, i) => (
-                    <li key={i}>{f}</li>
+              {gapLabels.length > 0 ? (
+                <div className="space-y-2">
+                  <p className="text-[11px] text-slate-500">
+                    Fill these in — including salary and other blanks left for you.
+                    Saved values are used to complete the form when you Auto-submit.
+                  </p>
+                  {gapLabels.map((label) => (
+                    <div key={label}>
+                      <label className="mb-0.5 block text-xs text-slate-400">
+                        {label}
+                      </label>
+                      <input
+                        value={answers[label] ?? ""}
+                        onChange={(e) =>
+                          setAnswers((a) => ({ ...a, [label]: e.target.value }))
+                        }
+                        className="w-full rounded-lg border border-amber-600/50 bg-amber-950/10 px-3 py-1.5 text-sm"
+                      />
+                    </div>
                   ))}
-                </ul>
+                  <button
+                    onClick={() => saveAnswers.mutate()}
+                    className="mt-1 rounded-lg border border-slate-700 px-3 py-1.5 text-sm hover:bg-slate-800"
+                  >
+                    Save answers
+                  </button>
+                </div>
               ) : (
                 <p className="text-xs text-slate-500">None flagged.</p>
+              )}
+              {gapNotes.length > 0 && (
+                <ul className="mt-3 list-disc space-y-1 pl-5 text-xs text-amber-300/90">
+                  {gapNotes.map((n, i) => (
+                    <li key={i}>{n}</li>
+                  ))}
+                </ul>
               )}
             </div>
           </div>
@@ -360,6 +481,37 @@ export default function ApplicationDetailPage() {
         )}
       </div>
 
+      {/* Tailored CV preview — review the exact PDF that gets attached. */}
+      <div className="mt-6 rounded-xl border border-slate-800 bg-slate-900 p-5">
+        <div className="mb-2 flex items-center gap-3">
+          <h2 className="text-sm font-semibold uppercase tracking-wide text-slate-400">
+            Tailored CV (preview)
+          </h2>
+          {cvUrl && (
+            <a
+              href={cvUrl}
+              target="_blank"
+              rel="noreferrer"
+              className="text-xs text-indigo-400 hover:underline"
+            >
+              Open full size ↗
+            </a>
+          )}
+        </div>
+        {cvUrl ? (
+          <iframe
+            src={cvUrl}
+            title="Tailored CV"
+            className="h-[600px] w-full rounded-lg border border-slate-800 bg-white"
+          />
+        ) : (
+          <p className="text-sm text-slate-500">
+            No tailored CV yet — click “Tailor CV + cover letter” above to generate
+            and preview it here before submitting.
+          </p>
+        )}
+      </div>
+
       <div className="mt-6 grid grid-cols-1 gap-4 lg:grid-cols-2">
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-5">
           <h2 className="mb-2 text-sm font-semibold uppercase tracking-wide text-slate-400">
@@ -371,7 +523,8 @@ export default function ApplicationDetailPage() {
             </pre>
           ) : (
             <p className="text-sm text-slate-500">
-              Not generated yet. Click “Tailor” above.
+              No cover letter — either not generated yet (click “Tailor” above), or
+              this application form doesn’t ask for one.
             </p>
           )}
         </div>

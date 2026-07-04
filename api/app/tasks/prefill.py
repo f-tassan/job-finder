@@ -22,7 +22,6 @@ from app.models import (
     Application,
     ApplicationEvent,
     ApplicationStatus,
-    CvVersion,
     Job,
 )
 from app.tasks.celery_app import celery_app
@@ -43,13 +42,56 @@ async def _prefill(app_id: uuid.UUID) -> dict:
         ).scalar_one_or_none()
         data = (bank.data if bank else {}) or {}
         values = candidate_values(data)
-        applier = get_applier(job.source, job.url)
+
+        # Resolve where the form lives. A LinkedIn redirect job resolves to the
+        # employer's real ATS URL (via the user's LinkedIn cookie); Easy Apply /
+        # unresolved jobs can't be pre-filled off-LinkedIn, so route them to the
+        # human with an explanation instead of opening a browser on a dead link.
+        from app.services.linkedin_resolve import resolve_apply_target
+
+        target_url, kind, note = await resolve_apply_target(session, app.user_id, job)
+        if target_url is None:
+            reason = note or "this posting can't be pre-filled automatically."
+            app.missing_fields = [reason]
+            if app.status in (
+                ApplicationStatus.discovered,
+                ApplicationStatus.drafting,
+                ApplicationStatus.ready_to_submit,
+                ApplicationStatus.needs_attention,
+            ):
+                app.status = ApplicationStatus.needs_attention
+            session.add(
+                ApplicationEvent(
+                    application_id=app.id,
+                    type="prefill_blocked",
+                    payload={"kind": kind, "reason": reason},
+                )
+            )
+            await session.commit()
+            if kind == "auth":
+                # Expired LinkedIn cookie — nudge at most once an hour, not per job.
+                from app.services.notify import notify_user_throttled
+
+                await notify_user_throttled(
+                    session,
+                    app.user_id,
+                    reason,
+                    key="linkedin_cookie_expired",
+                    ttl_seconds=3600,
+                )
+            else:
+                from app.services.notify import notify_user
+
+                await notify_user(session, app.user_id, f"{job.title}: {reason}")
+            return {"application_id": str(app_id), "kind": kind, "blocked": True}
+
+        applier = get_applier(job.source, target_url)
 
         # If the user saved a login for this employer portal, sign in and save a
         # draft on their account (never submit). Otherwise just rehearse-fill.
         from app.services.credentials import credentials_for_url
 
-        credentials = await credentials_for_url(session, app.user_id, job.url)
+        credentials = await credentials_for_url(session, app.user_id, target_url)
 
         shot_path = str(
             Path(settings.files_dir) / str(app.user_id) / "prefill" / f"{app.id}.png"
@@ -61,19 +103,17 @@ async def _prefill(app_id: uuid.UUID) -> dict:
 
         from playwright.async_api import async_playwright
 
+        from app.services.throttle import LAUNCH_ARGS, new_human_context, pace_host
+
         async with async_playwright() as p:
-            browser = await p.chromium.launch(args=["--no-sandbox"])
+            browser = await p.chromium.launch(args=LAUNCH_ARGS)
             try:
-                context = await browser.new_context(
-                    user_agent=(
-                        "Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 "
-                        "(KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-                    )
-                )
+                context = await new_human_context(browser)
                 page = await context.new_page()
                 try:
+                    await pace_host(target_url)  # polite, human-paced access
                     await page.goto(
-                        job.url, wait_until="domcontentloaded", timeout=30000
+                        target_url, wait_until="domcontentloaded", timeout=30000
                     )
                     await page.wait_for_timeout(1000)
                     result = await applier.prefill(
@@ -94,33 +134,11 @@ async def _prefill(app_id: uuid.UUID) -> dict:
             finally:
                 await browser.close()
 
-        # Opt-in fallback: when the deterministic applier filled little and the
-        # agent applier is enabled, let the LLM browser agent try. It owns its own
-        # browser session and never submits.
-        if settings.agent_applier_enabled and len(result.get("filled", {})) < 3:
-            cv = (
-                await session.execute(
-                    select(CvVersion)
-                    .where(CvVersion.user_id == app.user_id)
-                    .order_by(
-                        CvVersion.is_default.desc(), CvVersion.created_at.desc()
-                    )
-                )
-            ).scalars().first()
-            from app.appliers.agent import run_agent_prefill
-
-            agent_res = await run_agent_prefill(
-                job_url=job.url,
-                candidate=values,
-                cv_path=cv.file_path if cv else None,
-                shot_path=shot_path,
-            )
-            if not agent_res.get("error"):
-                result["agent_summary"] = agent_res.get("summary")
-                if agent_res.get("screenshot_path"):
-                    app.screenshot_path = agent_res["screenshot_path"]
-            else:
-                logger.info("agent applier fallback skipped: %s", agent_res["error"])
+        # NOTE: the LLM agent is intentionally NOT run here. Prefill happens in
+        # bulk (incl. auto-apply), so invoking the token-heavy agent on every hard
+        # form would be costly while only producing a screenshot (prefill can't
+        # persist the agent's fills into the real submit). The agent runs only on
+        # the explicit, per-job auto-submit for unknown ATS (see tasks/submit.py).
 
         draft_saved = bool(result.get("draft_saved"))
         needs_credentials = bool(result.get("needs_credentials"))

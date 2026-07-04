@@ -228,11 +228,23 @@ async def auto_submit_application(
     app = await _owned(session, user.id, app_id)
     job = await session.get(Job, app.job_id)
     url = (job.url or "").lower()
-    if "linkedin.com" in url or "bayt.com" in url:
+    if "bayt.com" in url:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
-            detail="Auto-submit is disabled for LinkedIn/Bayt — submit there yourself.",
+            detail="Auto-submit is disabled for Bayt — submit there yourself.",
         )
+    # LinkedIn is allowed ONLY when it resolved to an external company form
+    # (apply_kind == "offsite"); Easy Apply and not-yet-resolved jobs stay blocked.
+    if "linkedin.com" in url and job.apply_kind != "offsite":
+        if job.apply_kind == "easyapply":
+            detail = "Easy Apply lives on LinkedIn — submit it there yourself."
+        else:
+            detail = (
+                "This LinkedIn job hasn't resolved to an external apply form yet — "
+                "your LinkedIn cookie may be expired. Refresh it in Settings → "
+                "Employer portal logins, then re-run Pre-fill."
+            )
+        raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=detail)
     from app.tasks.submit import submit_application as task
 
     result = task.apply_async(args=[str(app_id)], queue="browser")

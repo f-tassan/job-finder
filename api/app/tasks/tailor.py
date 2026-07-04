@@ -62,7 +62,33 @@ async def _tailor(app_id: uuid.UUID) -> dict:
             "description": job.description,
         }
 
-        result = await tailoring.tailor(applicant, job_dict)
+        # Generate a cover letter only when the application form actually has one
+        # (detected at pre-fill: a "cover letter" field is flagged sensitive in
+        # missing_fields). If the job hasn't been pre-filled yet we don't know, so
+        # generate one to be safe. Saves tokens on forms that never ask for one.
+        mf = [str(m).lower() for m in (app.missing_fields or [])]
+        prefilled = bool(app.missing_fields) or bool(app.prefilled_answers)
+        # A cover letter is warranted when the form has a literal cover-letter
+        # field OR a free-text motivation / "why this company" question.
+        _cover_signals = (
+            "cover letter",
+            "cover_letter",
+            "motivation",
+            "why do you",
+            "why this",
+            "why us",
+            "why join",
+            "why you want",
+            "tell us why",
+        )
+        form_has_cover_letter = any(
+            any(sig in m for sig in _cover_signals) for m in mf
+        )
+        want_cover_letter = form_has_cover_letter or not prefilled
+
+        result = await tailoring.tailor(
+            applicant, job_dict, want_cover_letter=want_cover_letter
+        )
 
         contact = {
             "full_name_en": data.get("full_name_en"),
@@ -80,7 +106,7 @@ async def _tailor(app_id: uuid.UUID) -> dict:
         except Exception:  # noqa: BLE001 - keep text output even if PDF fails
             logger.exception("PDF render failed for application %s", app.id)
 
-        app.cover_letter = result["cover_letter"]
+        app.cover_letter = result["cover_letter"] or None
         app.keyword_coverage = result["keyword_coverage"]
         if app.status == ApplicationStatus.discovered:
             app.status = ApplicationStatus.drafting
@@ -101,8 +127,8 @@ async def _tailor(app_id: uuid.UUID) -> dict:
         await notify_user(
             session,
             app.user_id,
-            f"📝 Tailored CV + cover letter ready: {job.title}"
-            + (f" at {job.company}" if job.company else ""),
+            f"📝 Tailored CV{' + cover letter' if app.cover_letter else ''} ready: "
+            f"{job.title}" + (f" at {job.company}" if job.company else ""),
         )
     return {
         "application_id": str(app_id),

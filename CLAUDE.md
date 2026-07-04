@@ -43,7 +43,7 @@ applications, and notifications. The job catalog itself is shared (deduplicated)
 | Browser worker   | **Playwright (Python)** in its own container/queue                  |
 | Database         | **PostgreSQL 16** + **pgvector**                                    |
 | Embeddings       | `sentence-transformers` (`all-MiniLM-L6-v2`, 384-dim, local & free); pluggable to Voyage |
-| LLM              | **Anthropic Claude API** (`anthropic` Python SDK)                   |
+| LLM              | **OpenAI API** (`openai` Python SDK); pluggable to Anthropic Claude |
 | CV rendering     | **WeasyPrint** (HTML→PDF, ATS-safe) + optional `python-docx`        |
 | Frontend         | **Next.js 14** (App Router), TypeScript, Tailwind, **shadcn/ui**, TanStack Query, react-hook-form + zod, dnd-kit (kanban) |
 | Auth             | **Multi-user** JWT; first user seeded from env; admin adds the rest |
@@ -52,12 +52,17 @@ applications, and notifications. The job catalog itself is shared (deduplicated)
 | Reverse proxy    | **Caddy** (automatic HTTPS)                                         |
 | Deployment       | **Docker Compose**, single VPS                                     |
 
-### Claude model routing (verified June 2026 — pin these strings)
-- `claude-haiku-4-5-20251001` — cheap/high-volume: CV parsing, relevance pre-screen, field mapping.
-- `claude-sonnet-4-6` — default for quality: CV tailoring, cover letters, natural writing.
-- `claude-opus-4-8` — reserve for unusually hard tailoring only.
-Use the SDK's structured outputs for JSON-returning calls. Verify strings at
-https://docs.claude.com/en/docs/about-claude/models/overview before deploy.
+### LLM model routing (provider: **OpenAI** — the deployed default)
+This deployment runs on OpenAI (`LLM_PROVIDER=openai`, `OPENAI_API_KEY` set).
+- `gpt-4o-mini` (`OPENAI_PARSE_MODEL`) — cheap/high-volume: CV parsing, relevance
+  re-rank, form field-answering.
+- `gpt-4o` (`OPENAI_TAILOR_MODEL`) — quality: CV tailoring, cover letters.
+- `gpt-4.1` (`AGENT_APPLIER_MODEL`) — vision browser-agent (browser-use) that
+  fills & submits unknown/long-tail application forms on auto-submit.
+All JSON-returning calls use OpenAI structured outputs (`response_format`
+json_schema, strict). The provider is pluggable: set `LLM_PROVIDER=anthropic` +
+`ANTHROPIC_API_KEY` to switch to Claude (Haiku 4.5 for parse, Sonnet 5 for
+tailoring — Sonnet 5 because it supports structured outputs).
 
 ## 2. Repository layout
 

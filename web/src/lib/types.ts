@@ -48,6 +48,11 @@ export interface Job {
   company: string | null;
   location: string | null;
   url: string;
+  // Resolved LinkedIn apply routing: "offsite" (redirects to a real ATS we can
+  // submit), "easyapply" (on LinkedIn — manual only), or null (non-LinkedIn /
+  // not yet resolved).
+  apply_kind?: string | null;
+  apply_url?: string | null;
 }
 
 export interface Application {

@@ -75,6 +75,9 @@ class JobOut(BaseModel):
     company: str | None = None
     location: str | None = None
     url: str
+    # Resolved LinkedIn apply routing (None for non-LinkedIn / unresolved jobs).
+    apply_kind: str | None = None
+    apply_url: str | None = None
 
 
 # --- Applications ---
