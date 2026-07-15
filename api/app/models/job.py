@@ -62,3 +62,20 @@ class JobMatch(Base):
     )
     relevance_score: Mapped[float] = mapped_column(Float, nullable=False)
     created_at: Mapped[datetime] = mapped_column(server_default=func.now())
+
+
+class JobSkip(Base):
+    """A job this user tapped 🙈 Skip on. Outlives the deleted `discovered`
+    application so discovery and /jobs never re-track or re-announce it."""
+
+    __tablename__ = "job_skips"
+    __table_args__ = (UniqueConstraint("user_id", "job_id"),)
+
+    id: Mapped[uuid.UUID] = mapped_column(primary_key=True, default=uuid.uuid4)
+    user_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("app_user.id", ondelete="CASCADE"), nullable=False
+    )
+    job_id: Mapped[uuid.UUID] = mapped_column(
+        ForeignKey("jobs.id", ondelete="CASCADE"), nullable=False
+    )
+    created_at: Mapped[datetime] = mapped_column(server_default=func.now())

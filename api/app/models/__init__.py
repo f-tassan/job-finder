@@ -7,7 +7,7 @@ from app.models.application import (
 )
 from app.models.base import Base
 from app.models.credential import PortalCredential
-from app.models.job import Job, JobMatch
+from app.models.job import Job, JobMatch, JobSkip
 from app.models.user import AnswerBank, AppUser, CvVersion, SavedSearch
 
 __all__ = [
@@ -19,6 +19,7 @@ __all__ = [
     "PortalCredential",
     "Job",
     "JobMatch",
+    "JobSkip",
     "Application",
     "ApplicationDocument",
     "ApplicationEvent",

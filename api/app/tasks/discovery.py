@@ -30,6 +30,7 @@ from app.models import (
     AppUser,
     Job,
     JobMatch,
+    JobSkip,
     SavedSearch,
 )
 from app.services import embeddings, llm, relevance
@@ -181,6 +182,16 @@ async def _match_user(
         .all()
     ]
 
+    skipped_ids = set(
+        (
+            await session.execute(
+                select(JobSkip.job_id).where(JobSkip.user_id == user.id)
+            )
+        )
+        .scalars()
+        .all()
+    )
+
     # Rebuild this user's matches from scratch so location/threshold changes (and
     # newly-filtered-out jobs) are reflected immediately.
     await session.execute(delete(JobMatch).where(JobMatch.user_id == user.id))
@@ -192,6 +203,10 @@ async def _match_user(
         # Skip postings a submit attempt found closed/removed — don't re-surface or
         # re-track them (the application was deleted on purpose).
         if (job.raw or {}).get("closed"):
+            continue
+        # Same for anything this user tapped 🙈 Skip on: the application row is
+        # gone, so only job_skips stops us re-tracking and re-announcing it.
+        if job.id in skipped_ids:
             continue
         # KSA filter:
         #  - jobs WITH a location must be in Saudi Arabia;
@@ -290,7 +305,9 @@ async def _prune_removed_jobs(session: AsyncSession) -> dict:
     row itself is deleted when nothing else references it; if a user already has
     a non-discovered application for it (submitted/interview/…), the row is kept
     but flagged closed so it stays out of the feed while preserving that history.
-    Returns {'checked', 'removed', 'by_user': {user_id: discovered_removed}}.
+    Returns {'checked', 'removed', 'by_user': {user_id: [(title, company, url)]}}
+    — the jobs, not just a count, so each user can be told exactly which of their
+    cards vanished.
     """
     from sqlalchemy import func
 
@@ -339,7 +356,9 @@ async def _prune_removed_jobs(session: AsyncSession) -> dict:
             )
         ).scalars().all()
         for a in disc_apps:
-            by_user[a.user_id] = by_user.get(a.user_id, 0) + 1
+            by_user.setdefault(a.user_id, []).append(
+                (job.title, job.company, job.url)
+            )
             await session.delete(a)
         await session.execute(delete(JobMatch).where(JobMatch.job_id == jid))
         remaining = await session.scalar(
@@ -354,6 +373,24 @@ async def _prune_removed_jobs(session: AsyncSession) -> dict:
     await session.commit()
     logger.info("prune removed jobs: checked=%s removed=%s", checked, removed)
     return {"checked": checked, "removed": removed, "by_user": by_user}
+
+
+def _removed_jobs_message(gone_jobs: list[tuple[str, str | None, str | None]]) -> str:
+    """Telegram HTML naming each posting the employer pulled off this user's
+    board: '<title> at <company>', linked to the (now dead) posting."""
+    from app.bot import _esc
+
+    lines = []
+    for title, company, url in gone_jobs:
+        label = _esc(title) + (f" at {_esc(company)}" if company else "")
+        lines.append(f'• <a href="{_esc(url)}">{label}</a>' if url else f"• {label}")
+    head = (
+        "🗑 <b>A job was removed by the employer</b> and taken off your board:"
+        if len(gone_jobs) == 1
+        else f"🗑 <b>{len(gone_jobs)} jobs were removed by the employer</b> and "
+        "taken off your board:"
+    )
+    return head + "\n" + "\n".join(lines)
 
 
 async def _run_discovery(progress=None) -> dict:
@@ -394,13 +431,11 @@ async def _run_discovery(progress=None) -> dict:
         from app.services.notify import chat_id_for_user, notify_user, send_telegram
 
         # Tell each user whose discovered card(s) vanished because the employer
-        # pulled the posting.
-        for uid, count in (pruned.get("by_user") or {}).items():
+        # pulled the posting — naming each job, since a bare count leaves them
+        # wondering which one they lost.
+        for uid, gone_jobs in (pruned.get("by_user") or {}).items():
             await notify_user(
-                session,
-                uid,
-                f"🗑 {count} discovered job(s) were removed by the employer and "
-                "taken off your board.",
+                session, uid, _removed_jobs_message(gone_jobs), parse_mode="HTML"
             )
 
         n_users = max(len(users), 1)

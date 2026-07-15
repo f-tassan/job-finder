@@ -97,6 +97,17 @@ CREATE TABLE job_matches (
 );
 CREATE INDEX job_matches_user_score_idx ON job_matches(user_id, relevance_score DESC);
 
+-- Jobs the user tapped 🙈 Skip on. Kept after the tracked application is deleted
+-- so discovery never re-tracks or re-announces the same posting.
+CREATE TABLE job_skips (
+    id         UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
+    user_id    UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,
+    job_id     UUID NOT NULL REFERENCES jobs(id) ON DELETE CASCADE,
+    created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+    UNIQUE (user_id, job_id)
+);
+CREATE INDEX job_skips_user_idx ON job_skips(user_id);
+
 CREATE TABLE applications (
     id                UUID PRIMARY KEY DEFAULT uuid_generate_v4(),
     user_id           UUID NOT NULL REFERENCES app_user(id) ON DELETE CASCADE,

@@ -11,7 +11,8 @@ What it does:
         to the same chat (tailor task), ready to upload on the job portal.
       - ✅ I applied                    -> mark the application submitted
         (this is how jobs get marked submitted without touching the web page).
-      - 🙈 Skip                         -> drop the tracked application.
+      - 🙈 Skip                         -> drop the tracked application and
+        remember the skip, so the job leaves the feed for good.
       - 🔗 Apply link                   -> resolve a LinkedIn posting's real
         employer apply URL (uses the user's stored LinkedIn cookie).
   * Commands: /jobs (top matches), /status (pipeline), /discover (admin),
@@ -31,7 +32,8 @@ import uuid
 from datetime import datetime, timezone
 
 import httpx
-from sqlalchemy import func, select
+from sqlalchemy import delete, func, select
+from sqlalchemy.dialects.postgresql import insert as pg_insert
 
 from app.config import settings
 from app.db import SessionLocal
@@ -43,6 +45,7 @@ from app.models import (
     AppUser,
     Job,
     JobMatch,
+    JobSkip,
 )
 
 logger = logging.getLogger(__name__)
@@ -500,9 +503,21 @@ class Bot:
                 )
 
             elif action == "skip":
+                # Record the skip before dropping the application — without this
+                # the next discovery run treats the job as unseen and re-sends it.
+                await session.execute(
+                    pg_insert(JobSkip)
+                    .values(user_id=user.id, job_id=job.id)
+                    .on_conflict_do_nothing(index_elements=["user_id", "job_id"])
+                )
+                await session.execute(
+                    delete(JobMatch).where(
+                        JobMatch.user_id == user.id, JobMatch.job_id == job.id
+                    )
+                )
                 await session.delete(app)
                 await session.commit()
-                await ack("Skipped 🙈")
+                await ack("Skipped 🙈 — I won't show you this one again")
 
             elif action == "link":
                 await ack("Resolving the employer's apply link…")
